@@ -1,3 +1,6 @@
 python-telegram-bot==21.4
 python-dotenv==1.0.1
 httpx==0.28.1
+timezonefinder==6.2.0
+pytz==2024.1
+pyephem
