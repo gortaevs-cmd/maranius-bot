@@ -4,3 +4,5 @@ httpx==0.28.1
 timezonefinder==6.2.0
 pytz==2024.1
 pyephem
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
