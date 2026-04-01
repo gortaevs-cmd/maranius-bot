@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import os
 import xml.etree.ElementTree as ET
@@ -10,14 +11,7 @@ import pytz
 import ephem
 from timezonefinder import TimezoneFinder
 from dotenv import load_dotenv
-from telegram import (
-    Update,
-    ReplyKeyboardRemove,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -36,7 +30,6 @@ from integrations.zenclass_handlers import (
     zenclass_create_student_handler,
     zenclass_create_student_with_email,
     is_valid_email,
-    get_zenclass_menu_keyboard,
 )
 from integrations import platform_db
 from events.handlers import (
@@ -46,6 +39,7 @@ from events.handlers import (
 )
 from events import storage as events_storage
 
+import ui
 
 load_dotenv()
 
@@ -194,15 +188,6 @@ async def add_admin(user_id: int) -> None:
         admins = _load_admins()
         admins.add(user_id)
         _save_admins(admins)
-
-
-def _get_admin_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура режима бога."""
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("Пользователи"), KeyboardButton("Группы")],
-        [KeyboardButton("События")],
-        [KeyboardButton("Zenclass")],
-    ], resize_keyboard=True, one_time_keyboard=False)
 
 
 # Настройки по умолчанию
@@ -465,14 +450,55 @@ async def _get_city_from_coords(lat: float, lon: float) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await ensure_user_saved(update)
     await update.message.reply_text(
-        "Привет! Я тестовый бот EL.\n\n"
-        "Доступные команды:\n"
-        "/weather - Погода по геолокации\n"
-        "/rate - Курс валют\n"
-        "/moon - Информация о луне\n\n"
-        "Напиши команду или текст для меню.",
+        ui.START_MESSAGE,
         reply_markup=ReplyKeyboardRemove(),
     )
+
+
+def _me_fmt(value: object) -> str:
+    """Строка для вывода /me; пустые значения — длинное тире."""
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    return html.escape(str(value), quote=False)
+
+
+async def me_cmd(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /me — поля User и Chat из Telegram API (как приходят в апдейте)."""
+    await ensure_user_saved(update)
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not update.message:
+        return
+
+    lines = [
+        "<b>Пользователь (Telegram User)</b>",
+        f"<code>id</code>: <code>{user.id}</code>",
+        f"<code>is_bot</code>: {_me_fmt(user.is_bot)}",
+        f"<code>first_name</code>: {_me_fmt(user.first_name)}",
+        f"<code>last_name</code>: {_me_fmt(user.last_name)}",
+        f"<code>username</code>: {_me_fmt(f'@{user.username}' if user.username else None)}",
+        f"<code>language_code</code>: {_me_fmt(user.language_code)}",
+        f"<code>is_premium</code>: {_me_fmt(getattr(user, 'is_premium', None))}",
+    ]
+    if hasattr(user, "added_to_attachment_menu"):
+        lines.append(
+            f"<code>added_to_attachment_menu</code>: "
+            f"{_me_fmt(getattr(user, 'added_to_attachment_menu', None))}"
+        )
+
+    lines.append("")
+    lines.append("<b>Чат (Telegram Chat)</b>")
+    if chat:
+        lines.append(f"<code>id</code>: <code>{chat.id}</code>")
+        lines.append(f"<code>type</code>: {_me_fmt(chat.type)}")
+        lines.append(f"<code>title</code>: {_me_fmt(chat.title)}")
+        lines.append(f"<code>username</code>: {_me_fmt(f'@{chat.username}' if chat.username else None)}")
+    else:
+        lines.append("—")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -488,15 +514,14 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_admin(user_id):
         # Показываем админ-панель с кнопками в нижней панели
         await update.message.reply_text(
-            "Режим бога активирован.\nВыбери действие:",
-            reply_markup=_get_admin_keyboard(),
+            ui.ADMIN_PANEL_TITLE,
+            reply_markup=ui.get_admin_keyboard(),
         )
     else:
         # Запрашиваем код доступа и устанавливаем флаг ожидания
         context.user_data["waiting_admin_code"] = True
         await update.message.reply_text(
-            "Для доступа к режиму бога введи код доступа.\n"
-            "Отправь код в следующем сообщении:",
+            ui.ADMIN_ASK_CODE,
             reply_markup=ReplyKeyboardRemove(),
         )
 
@@ -689,15 +714,11 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Показываем погоду по последней локации
         text = await _weather_at_coords(lat, lon, place_name, updated_at, timezone_str)
         if not text:
-            await update.message.reply_text("Не удалось получить погоду, попробуй позже.")
+            await update.message.reply_text(ui.MSG_WEATHER_FETCH_FAIL)
             return
         
         # Добавляем кнопку для обновления локации
-        keyboard = ReplyKeyboardMarkup(
-            [[KeyboardButton("Обновить локацию", request_location=True)]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
+        keyboard = ui.get_weather_refresh_keyboard()
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
     else:
         # Если локации нет, запрашиваем её
@@ -706,13 +727,9 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def weather_here(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await ensure_user_saved(update)
-    keyboard = ReplyKeyboardMarkup(
-        [[KeyboardButton("Отправить мою геопозицию", request_location=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
+    keyboard = ui.get_weather_share_keyboard()
     await update.message.reply_text(
-        "Нажми кнопку, чтобы отправить свою геопозицию, и я покажу погоду для твоего места.",
+        ui.MSG_WEATHER_ASK_LOCATION,
         reply_markup=keyboard,
     )
 
@@ -751,7 +768,7 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
         text = await _weather_at_coords(lat, lon, place_name, updated_at, timezone_str)
         if not text:
             await update.message.reply_text(
-                "Не удалось получить погоду по геолокации, попробуй позже.",
+                ui.MSG_WEATHER_GEO_FAIL,
                 reply_markup=remove_kb,
             )
             return
@@ -759,30 +776,16 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         print(f"Ошибка погода по геолокации: {e!r}")
         await update.message.reply_text(
-            "Не удалось получить погоду по геолокации, попробуй позже.",
+            ui.MSG_WEATHER_GEO_FAIL,
             reply_markup=remove_kb,
         )
 
 
 async def rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await ensure_user_saved(update)
-    buttons = []
-    
-    # Первая строка: USD, EUR, CNY
-    buttons.append([
-        InlineKeyboardButton(code, callback_data=f"rate:{code}")
-        for code in RATE_BASE_CURRENCIES[:3]
-    ])
-    
-    # Вторая строка: одна кнопка для золота и серебра
-    buttons.append([
-        InlineKeyboardButton("🥇🥈 Золото/Серебро", callback_data="rate:METALS")
-    ])
-    
-    keyboard = InlineKeyboardMarkup(buttons)
-
+    keyboard = ui.get_rate_inline_keyboard(RATE_BASE_CURRENCIES[:3])
     await update.message.reply_text(
-        f"Выбери валюту, для которой показать курс к {RATE_QUOTE_CURRENCY}:",
+        ui.rate_choose_prompt(RATE_QUOTE_CURRENCY),
         reply_markup=keyboard,
     )
 
@@ -912,7 +915,7 @@ async def rate_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         xag_rate = await _fetch_rate("XAG", quote_currency)
         
         if xau_rate is None or xag_rate is None:
-            await query.edit_message_text("Не удалось получить курс драгоценных металлов, попробуй позже.")
+            await query.edit_message_text(ui.MSG_RATE_METALS_FAIL)
             return
         
         # Формируем сообщение с обоими курсами
@@ -943,7 +946,7 @@ async def rate_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Получаем текущий курс
     current_rate = await _fetch_rate(base_currency, quote_currency)
     if current_rate is None:
-        await query.edit_message_text("Не удалось получить курс валют, попробуй позже.")
+        await query.edit_message_text(ui.MSG_RATE_CURRENCY_FAIL)
         return
     
     # Получаем исторические курсы
@@ -1020,12 +1023,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await add_admin(user_id)
             context.user_data["waiting_admin_code"] = False
             await update.message.reply_text(
-                "Код верный! Режим бога активирован.\nВыбери действие:",
-                reply_markup=_get_admin_keyboard(),
+                ui.ADMIN_CODE_OK,
+                reply_markup=ui.get_admin_keyboard(),
             )
         else:
             await update.message.reply_text(
-                "Неверный код доступа. Попробуй еще раз или отправь /admin для повторной попытки.",
+                ui.ADMIN_CODE_WRONG,
             )
         return
 
@@ -1036,36 +1039,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ok = await zenclass_create_student_with_email(update, context, text)
             if ok:
                 await update.message.reply_text(
-                    "✅ Профиль студента создан в Zenclass и сохранён в базу platform_users."
+                    ui.MSG_ZC_STUDENT_CREATED_OK
                 )
             else:
                 await update.message.reply_text(
-                    "❌ Не удалось создать студента. Проверьте email и токен API."
+                    ui.MSG_ZC_STUDENT_CREATED_FAIL
                 )
         else:
             await update.message.reply_text(
-                "❌ Неверный формат email. Отправьте email (например: user@example.com)"
+                ui.MSG_ZC_EMAIL_INVALID
             )
         return
 
     # Обработка команд администратора
     if is_admin(user_id):
-        if text == "Пользователи":
+        if text == ui.BTN_ADMIN_USERS:
             users = _load_users()
             count = len(users)
-            await update.message.reply_text(f"Пользователей подписано: {count}")
-        elif text == "Группы":
+            await update.message.reply_text(ui.MSG_ADMIN_USER_COUNT.format(count=count))
+        elif text == ui.BTN_ADMIN_GROUPS:
             groups_count = len(_known_chats)
             if groups_count == 0:
-                await update.message.reply_text("Бот не состоит ни в одной группе.")
+                await update.message.reply_text(ui.MSG_ADMIN_NO_GROUPS)
             else:
                 groups_list = ", ".join(str(chat_id) for chat_id in _known_chats)
-                await update.message.reply_text(f"Группы ({groups_count}): {groups_list}")
-        elif text == "События":
+                await update.message.reply_text(
+                    ui.MSG_ADMIN_GROUPS_LIST.format(count=groups_count, ids=groups_list)
+                )
+        elif text == ui.BTN_ADMIN_EVENTS:
             stats = events_storage.get_events_stats()
-            type_labels = {"subscribe": "➕ Подписки", "unsubscribe": "👋 Отписки", "reaction": "❤️ Реакции"}
+            type_labels = {
+                "subscribe": ui.EVENT_LABEL_SUBSCRIBE,
+                "unsubscribe": ui.EVENT_LABEL_UNSUBSCRIBE,
+                "reaction": ui.EVENT_LABEL_REACTION,
+            }
             parts = [
-                "📊 <b>События (Telegram)</b>",
+                ui.EVENTS_TITLE_HTML,
                 "",
                 f"Всего: {stats['total']}",
                 f"  {type_labels['subscribe']}: {stats['subscribe']}",
@@ -1074,7 +1083,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ]
             if stats["last_events"]:
                 parts.append("")
-                parts.append("Последние события:")
+                parts.append(ui.EVENTS_RECENT_HEADER)
                 for e in stats["last_events"][:5]:
                     ts = e.get("timestamp", "")[:10]
                     etype = e.get("type", "?")
@@ -1083,43 +1092,43 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     uname = f"@{user['username']}" if user.get("username") else (user.get("first_name") or "—")
                     parts.append(f"  • {ts} | {etype} | {chat_title} | {uname}")
             await update.message.reply_text("\n".join(parts), parse_mode="HTML")
-        elif text == "Zenclass":
+        elif text == ui.BTN_ADMIN_ZENCLASS:
             # Показываем меню Zenclass
-            keyboard = get_zenclass_menu_keyboard()
+            keyboard = ui.get_zenclass_menu_keyboard()
             await update.message.reply_text(
-                "🔧 Zenclass API\n\nВыбери действие:",
+                ui.ZENCLASS_MENU_HEADER,
                 reply_markup=keyboard,
             )
-        elif text == "🔍 Тест API":
+        elif text == ui.BTN_ZC_TEST:
             await zenclass_test(update, context)
-        elif text == "👥 Студенты":
+        elif text == ui.BTN_ZC_STUDENTS:
             await zenclass_students(update, context)
-        elif text == "📚 Курсы":
+        elif text == ui.BTN_ZC_COURSES:
             await zenclass_courses(update, context)
-        elif text == "➕ Создать студента":
+        elif text == ui.BTN_ZC_CREATE:
             await zenclass_create_student_handler(update, context)
-        elif text == "🔙 Назад":
+        elif text == ui.BTN_ZC_BACK:
             # Возвращаемся в главное меню админа
             await update.message.reply_text(
-                "Режим бога.\nВыбери действие:",
-                reply_markup=_get_admin_keyboard(),
+                ui.ADMIN_BACK_MAIN,
+                reply_markup=ui.get_admin_keyboard(),
             )
         else:
             # Если это не команда админа, проверяем другие команды
-            if text == "Обновить локацию":
+            if text == ui.BTN_WEATHER_REFRESH:
                 await weather_here(update, context)
             else:
                 await update.message.reply_text(
-                    "Неизвестная команда. Используй /start для списка команд.",
+                    ui.UNKNOWN_COMMAND_HINT,
                     reply_markup=ReplyKeyboardRemove(),
                 )
     else:
         # Для обычных пользователей
-        if text == "Обновить локацию":
+        if text == ui.BTN_WEATHER_REFRESH:
             await weather_here(update, context)
         else:
             await update.message.reply_text(
-                "Неизвестная команда. Используй /start для списка команд.",
+                ui.UNKNOWN_COMMAND_HINT,
                 reply_markup=ReplyKeyboardRemove(),
             )
 
@@ -1136,6 +1145,7 @@ def main() -> None:
 
     # Регистрация обработчиков команд
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("me", me_cmd))
     application.add_handler(CommandHandler("weather", weather))
     application.add_handler(CommandHandler("rate", rate))
     application.add_handler(CommandHandler("moon", moon_cmd))

@@ -3,8 +3,9 @@ import json
 import re
 from typing import TYPE_CHECKING
 
-from telegram import ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
+
+import ui
 
 from integrations.zenclass_api import (
     ZENCLASS_API_TOKEN,
@@ -22,53 +23,39 @@ if TYPE_CHECKING:
 async def zenclass_test(update: "Update", context: ContextTypes.DEFAULT_TYPE) -> None:
     """Тестирование подключения к Zenclass API."""
     if not ZENCLASS_API_TOKEN:
-        await update.message.reply_text(
-            "❌ Zenclass API токен не настроен!\n\n"
-            "Добавь в .env файл:\n"
-            "ZENCLASS_API_TOKEN=твой_токен\n"
-            "ZENCLASS_API_BASE_URL=https://api.zenclass.net (опционально)"
-        )
+        await update.message.reply_text(ui.ZC_MSG_TOKEN_MISSING_LONG)
         return
 
-    await update.message.reply_text("🔄 Проверяю подключение к Zenclass API...")
+    await update.message.reply_text(ui.ZC_MSG_CHECKING)
 
     school_info = await zenclass_get_school_info()
     if school_info:
         info_text = json.dumps(school_info, ensure_ascii=False, indent=2)
         # Разбиваем на части если слишком длинное
         if len(info_text) > 4000:
-            await update.message.reply_text(
-                "✅ Подключение успешно!\n\n"
-                "📊 Информация о школе получена (слишком длинная для отображения)"
-            )
+            await update.message.reply_text(ui.ZC_MSG_SCHOOL_OK_LONG)
         else:
             await update.message.reply_text(
-                f"✅ Подключение успешно!\n\n📊 Информация о школе:\n```json\n{info_text}\n```",
+                ui.ZC_MSG_SCHOOL_OK_JSON.format(json=info_text),
                 parse_mode="Markdown",
             )
     else:
-        await update.message.reply_text(
-            "❌ Не удалось подключиться к Zenclass API.\n\n"
-            "Проверь:\n"
-            "1. Правильность токена\n"
-            "2. Разрешения токена (scopes)\n"
-            "3. Базовый URL API"
-        )
+        await update.message.reply_text(ui.ZC_MSG_CONNECT_FAIL)
 
 
 async def zenclass_students(update: "Update", context: ContextTypes.DEFAULT_TYPE) -> None:
     """Получить список студентов."""
     if not ZENCLASS_API_TOKEN:
-        await update.message.reply_text("❌ Zenclass API токен не настроен!")
+        await update.message.reply_text(ui.ZC_MSG_TOKEN_MISSING)
         return
 
-    await update.message.reply_text("🔄 Загружаю список студентов...")
+    await update.message.reply_text(ui.ZC_MSG_LOADING_STUDENTS)
 
     students = await zenclass_get_students()
     if students:
         students_list = students.get("data", []) if isinstance(students, dict) else students
         if isinstance(students_list, list) and len(students_list) > 0:
-            text = f"👥 Студенты ({len(students_list)}):\n\n"
+            text = ui.ZC_MSG_STUDENTS_HEADER.format(n=len(students_list))
             for i, student in enumerate(students_list[:10], 1):
                 student_id = student.get("id", "N/A")
                 email = student.get("email", "N/A")
@@ -76,59 +63,58 @@ async def zenclass_students(update: "Update", context: ContextTypes.DEFAULT_TYPE
                 text += f"{i}. {name} ({email})\nID: {student_id}\n\n"
 
             if len(students_list) > 10:
-                text += f"... и еще {len(students_list) - 10} студентов"
+                text += ui.ZC_MSG_MORE_STUDENTS.format(n=len(students_list) - 10)
 
             await update.message.reply_text(text)
         else:
             await update.message.reply_text(
-                "📋 Список студентов пуст или формат ответа неожиданный.\n\n"
-                "Полный ответ:\n" + json.dumps(students, ensure_ascii=False, indent=2)
+                ui.ZC_MSG_STUDENTS_EMPTY.format(
+                    payload=json.dumps(students, ensure_ascii=False, indent=2)
+                )
             )
     else:
-        await update.message.reply_text("❌ Не удалось получить список студентов.")
+        await update.message.reply_text(ui.ZC_MSG_STUDENTS_FAIL)
 
 
 async def zenclass_courses(update: "Update", context: ContextTypes.DEFAULT_TYPE) -> None:
     """Получить список курсов."""
     if not ZENCLASS_API_TOKEN:
-        await update.message.reply_text("❌ Zenclass API токен не настроен!")
+        await update.message.reply_text(ui.ZC_MSG_TOKEN_MISSING)
         return
 
-    await update.message.reply_text("🔄 Загружаю список курсов...")
+    await update.message.reply_text(ui.ZC_MSG_LOADING_COURSES)
 
     courses = await zenclass_get_courses()
     if courses:
         courses_list = courses.get("data", []) if isinstance(courses, dict) else courses
         if isinstance(courses_list, list) and len(courses_list) > 0:
-            text = f"📚 Курсы ({len(courses_list)}):\n\n"
+            text = ui.ZC_MSG_COURSES_HEADER.format(n=len(courses_list))
             for i, course in enumerate(courses_list[:10], 1):
                 course_id = course.get("id", "N/A")
                 name = course.get("name", "N/A")
                 text += f"{i}. {name}\nID: {course_id}\n\n"
 
             if len(courses_list) > 10:
-                text += f"... и еще {len(courses_list) - 10} курсов"
+                text += ui.ZC_MSG_MORE_COURSES.format(n=len(courses_list) - 10)
 
             await update.message.reply_text(text)
         else:
             await update.message.reply_text(
-                "📋 Список курсов пуст или формат ответа неожиданный.\n\n"
-                "Полный ответ:\n" + json.dumps(courses, ensure_ascii=False, indent=2)
+                ui.ZC_MSG_COURSES_EMPTY.format(
+                    payload=json.dumps(courses, ensure_ascii=False, indent=2)
+                )
             )
     else:
-        await update.message.reply_text("❌ Не удалось получить список курсов.")
+        await update.message.reply_text(ui.ZC_MSG_COURSES_FAIL)
 
 
 async def zenclass_create_student_handler(update: "Update", context: ContextTypes.DEFAULT_TYPE) -> None:
     """Запросить email для создания студента."""
     if not ZENCLASS_API_TOKEN:
-        await update.message.reply_text("❌ Zenclass API токен не настроен!")
+        await update.message.reply_text(ui.ZC_MSG_TOKEN_MISSING)
         return
     context.user_data["awaiting_zenclass_email"] = True
-    await update.message.reply_text(
-        "📝 Создание профиля студента в Zenclass.\n\n"
-        "Введите email студента (например: student@example.com):"
-    )
+    await update.message.reply_text(ui.ZC_MSG_CREATE_STUDENT_PROMPT)
 
 
 async def zenclass_create_student_with_email(
@@ -165,16 +151,3 @@ async def zenclass_create_student_with_email(
 def is_valid_email(text: str) -> bool:
     """Проверить, похоже ли сообщение на email."""
     return bool(re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", text.strip()))
-
-
-def get_zenclass_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Получить клавиатуру меню Zenclass."""
-    return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("🔍 Тест API"), KeyboardButton("👥 Студенты")],
-            [KeyboardButton("📚 Курсы"), KeyboardButton("➕ Создать студента")],
-            [KeyboardButton("🔙 Назад")],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
