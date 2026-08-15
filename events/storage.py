@@ -1,10 +1,11 @@
 """Хранение событий: подписки, отписки, реакции."""
 import asyncio
-import json
 import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
+
+from integrations.json_storage import load_json, save_json
 
 _events_lock = asyncio.Lock()
 _events_file: Optional[str] = None
@@ -18,21 +19,16 @@ def init_storage(base_dir: str) -> None:
 
 def _load_events() -> Dict[str, Any]:
     """Загрузить события из файла."""
-    if not _events_file or not os.path.exists(_events_file):
+    if not _events_file:
         return {"events": [], "schema_version": 1}
-    try:
-        with open(_events_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {"events": [], "schema_version": 1}
+    return load_json(_events_file, {"events": [], "schema_version": 1})
 
 
 def _save_events(data: Dict[str, Any]) -> None:
     """Сохранить события в файл."""
     if not _events_file:
         return
-    with open(_events_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    save_json(_events_file, data, trailing_newline=True)
 
 
 async def save_event(
@@ -67,14 +63,8 @@ async def save_event(
 def get_monitored_chats(base_dir: str) -> Set[int]:
     """Загрузить список отслеживаемых чатов."""
     path = os.path.join(base_dir, "monitored_chats.json")
-    if not os.path.exists(path):
-        return set()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return set(data.get("chat_ids", []))
-    except (json.JSONDecodeError, OSError):
-        return set()
+    data = load_json(path, {"chat_ids": []})
+    return set(data.get("chat_ids", []))
 
 
 def add_monitored_chat(base_dir: str, chat_id: int) -> None:
@@ -82,8 +72,7 @@ def add_monitored_chat(base_dir: str, chat_id: int) -> None:
     path = os.path.join(base_dir, "monitored_chats.json")
     chats = get_monitored_chats(base_dir)
     chats.add(chat_id)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"chat_ids": list(chats)}, f, ensure_ascii=False, indent=2)
+    save_json(path, {"chat_ids": list(chats)}, trailing_newline=True)
 
 
 def get_events_stats() -> Dict[str, Any]:

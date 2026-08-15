@@ -1,17 +1,19 @@
 import asyncio
+import csv
 import html
 import json
 import os
-import xml.etree.ElementTree as ET
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, Optional, Set
+from datetime import date, datetime, timedelta, time as dt_time
+from pathlib import Path
+from typing import Any, Dict, Optional, Set, Tuple
 
 import httpx
 import pytz
 import ephem
 from timezonefinder import TimezoneFinder
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardRemove
+from telegram import InputFile, MenuButtonCommands, Update
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -22,16 +24,23 @@ from telegram.ext import (
     filters,
 )
 
-# Импорты интеграций
-from integrations.zenclass_handlers import (
-    zenclass_test,
-    zenclass_students,
-    zenclass_courses,
-    zenclass_create_student_handler,
-    zenclass_create_student_with_email,
-    is_valid_email,
+# Явный путь к .env рядом с bot.py (не зависит от текущей папки в терминале и iCloud/BOM).
+_BOT_DIR = Path(__file__).resolve().parent
+load_dotenv(_BOT_DIR / ".env", override=True)
+
+from integrations import (
+    admin_alerts,
+    analytics,
+    daily_practice,
+    dice_content,
+    ewasml_services,
+    inbox as inbox_mod,
+    platform_db,
+    user_registry,
+    vip_codes,
+    vip_content,
 )
-from integrations import platform_db
+from integrations.json_storage import JsonStorageError, load_json, pop_recovery_events, save_json
 from events.handlers import (
     make_subscribe_handler,
     make_unsubscribe_handler,
@@ -40,19 +49,63 @@ from events.handlers import (
 from events import storage as events_storage
 
 import ui
+from handlers import consent as consent_handlers
+from handlers import vip as vip_handlers
 
-load_dotenv()
+# Суперюзеры стенда — режим бога и VIP навсегда без кода в чат.
+SEED_ADMIN_IDS: Set[int] = {186758977}
 
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CODE = os.getenv("ADMIN_CODE", "admin123")  # Код доступа по умолчанию
+def _env_strip(name: str) -> Optional[str]:
+    v = os.getenv(name)
+    if v is None:
+        return None
+    v = v.strip().strip("'\"")
+    return v if v else None
 
+
+def _token_numeric_id(token: Optional[str]) -> str:
+    if not token or ":" not in token:
+        return "?"
+    return token.split(":", 1)[0].strip()
+
+
+def resolve_bot_token() -> Tuple[Optional[str], str]:
+    """
+    Токен по BOT_PROFILE (test | prod).
+    Для test только BOT_TOKEN_TEST — без fallback на BOT_TOKEN, иначе легко подхватить прод.
+    Для prod: BOT_TOKEN_PROD или запасной BOT_TOKEN.
+    """
+    raw = (_env_strip("BOT_PROFILE") or "prod").lower()
+    if raw in ("test", "dev", "local"):
+        profile = "test"
+    elif raw in ("prod", "production", "live"):
+        profile = "prod"
+    else:
+        profile = "prod"
+    if profile == "test":
+        token = _env_strip("BOT_TOKEN_TEST")
+    else:
+        token = _env_strip("BOT_TOKEN_PROD") or _env_strip("BOT_TOKEN")
+    return token, profile
+
+
+BOT_TOKEN, BOT_PROFILE_ACTIVE = resolve_bot_token()
+TELEGRAM_PROXY_URL = _env_strip("TELEGRAM_PROXY_URL") or ""
 # Файлы с данными
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = str(_BOT_DIR)
 USERS_FILE = os.path.join(BASE_DIR, "users.json")
 ADMINS_FILE = os.path.join(BASE_DIR, "admins.json")
-_users_lock = asyncio.Lock()
+VIP_NOTIFY_FILE = os.path.join(BASE_DIR, "data", "vip", "admin_notify.json")
+# users_lock живёт в integrations/user_registry.py, чтобы быть рядом с данными.
+_users_lock = user_registry.users_lock
 _admins_lock = asyncio.Lock()
+_vip_notify_lock = asyncio.Lock()
+
+# Запрет пересылки VIP и ангельских ответов (ссылка @maraniuss кликабельна).
+PROTECT_KWARGS = {"protect_content": True}
+
+ADMIN_NOTIFY_COOLDOWN_SEC = 300
 
 # Множество chat_id для отслеживания групп
 _known_chats: Set[int] = set()
@@ -60,37 +113,25 @@ _known_chats: Set[int] = set()
 
 def _load_users() -> Dict[str, Any]:
     """Загрузить словарь user_id -> данные из users.json."""
-    if not os.path.exists(USERS_FILE):
-        return {}
-    try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return user_registry.load_users()
 
 
 def _save_users(users: Dict[str, Any]) -> None:
     """Сохранить словарь пользователей в users.json."""
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
+    user_registry.save_users(users)
 
 
 def _load_admins() -> Set[int]:
     """Загрузить множество admin user_id из admins.json."""
-    if not os.path.exists(ADMINS_FILE):
-        return set()
-    try:
-        with open(ADMINS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return set(data.get("admins", []))
-    except (json.JSONDecodeError, OSError):
-        return set()
+    data = load_json(Path(ADMINS_FILE), {"admins": []})
+    if not isinstance(data, dict):
+        raise ValueError(f"admins.json должен содержать JSON-объект: {ADMINS_FILE}")
+    return set(data.get("admins", []))
 
 
 def _save_admins(admins: Set[int]) -> None:
     """Сохранить множество администраторов в admins.json."""
-    with open(ADMINS_FILE, "w", encoding="utf-8") as f:
-        json.dump({"admins": list(admins)}, f, ensure_ascii=False, indent=2)
+    save_json(Path(ADMINS_FILE), {"admins": list(admins)}, trailing_newline=True)
 
 
 def _get_timezone_by_coords(lat: float, lon: float) -> Optional[str]:
@@ -116,52 +157,36 @@ def _format_local_time(utc_time: datetime, timezone_str: Optional[str] = None) -
     return utc_time.strftime("%d.%m.%Y %H:%M (UTC)")
 
 
-async def ensure_user_saved(update: Update) -> None:
-    """Обновить/добавить данные пользователя из update и сохранить в users.json."""
+async def ensure_user_saved(update: Update, *, bot=None) -> bool:
+    """
+    Обновить/добавить данные пользователя в users.json.
+    Returns True если пользователь новый (первый визит).
+    """
     user = update.effective_user
     if not user:
-        return
+        return False
     uid = str(user.id)
-    now = datetime.utcnow()
-    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    record = {
-        "id": user.id,
-        "username": user.username,
-        "first_name": user.first_name,
-        "last_name": user.last_name or "",
-        "language_code": user.language_code or "",
-        "is_premium": getattr(user, "is_premium", False),
-        "last_seen": now_str,
-    }
-    
-    # Сохранение локации, если она есть в сообщении
-    if update.message and update.message.location:
-        lat = update.message.location.latitude
-        lon = update.message.location.longitude
-        timezone_str = _get_timezone_by_coords(lat, lon)
-        record["last_location"] = {
-            "lat": lat,
-            "lon": lon,
-            "updated_at": now_str,
-        }
-        if timezone_str:
-            record["timezone"] = timezone_str
-    
+    # После принятия политики уже может быть минимальная запись {id, policy_*}.
+    # Новым считаем профиль, которому ещё не задавали first_seen.
+    existing = _load_users().get(uid)
+    is_new = not isinstance(existing, dict) or not existing.get("first_seen")
+
     async with _users_lock:
         users = _load_users()
-        if uid not in users:
-            record["first_seen"] = now_str
-        else:
-            record["first_seen"] = users[uid].get("first_seen", now_str)
-            # Сохраняем существующую локацию и часовой пояс, если они есть
-            if "last_location" not in record and "last_location" in users[uid]:
-                record["last_location"] = users[uid]["last_location"]
-            if "timezone" not in record and "timezone" in users[uid]:
-                record["timezone"] = users[uid]["timezone"]
-        users[uid] = record
+        user_registry.merge_telegram_profile(
+            users,
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name or "",
+            last_name=user.last_name or "",
+            language_code=user.language_code or "",
+            is_premium=getattr(user, "is_premium", False),
+            seed_admin_ids=SEED_ADMIN_IDS,
+        )
+        if user.id in SEED_ADMIN_IDS:
+            users[uid]["vip"] = True
         _save_users(users)
 
-    # Кросс-сервисная база: создаём/обновляем platform_user по telegram_id
     name = (user.first_name or "") + (" " + (user.last_name or "") if user.last_name else "")
     if not name.strip():
         name = user.username or None
@@ -170,16 +195,75 @@ async def ensure_user_saved(update: Update) -> None:
         name=name.strip() or None,
     )
 
-    # Отслеживание chat_id для групп
     chat = update.effective_chat
     if chat and chat.type in ("group", "supergroup"):
         _known_chats.add(chat.id)
 
+    if is_new and bot:
+        await admin_alerts.notify_new_subscriber(
+            bot,
+            SEED_ADMIN_IDS,
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name or "",
+        )
+    return is_new
+
+
+def ensure_seed_admins() -> None:
+    """Гарантировать seed-админов в admins.json (без ввода кода в чат)."""
+    admins = _load_admins()
+    if SEED_ADMIN_IDS.issubset(admins):
+        return
+    admins |= SEED_ADMIN_IDS
+    _save_admins(admins)
+
+
+def ensure_seed_vip() -> None:
+    """Гарантировать seed-пользователям VIP в users.json (навсегда, как режим бога)."""
+    users = _load_users()
+    changed = False
+    for user_id in SEED_ADMIN_IDS:
+        if user_registry.grant_vip(users, user_id, source="seed_admin"):
+            changed = True
+        users.setdefault(str(user_id), {})["is_internal"] = True
+        changed = True
+    if changed:
+        _save_users(users)
+
+
+async def _save_user_location(uid: str, lat: float, lon: float) -> None:
+    now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timezone_str = _get_timezone_by_coords(lat, lon)
+    async with _users_lock:
+        users = _load_users()
+        row = users.setdefault(uid, {})
+        row["last_location"] = {"lat": lat, "lon": lon, "updated_at": now_str}
+        if timezone_str:
+            row["timezone"] = timezone_str
+        _save_users(users)
+
+
+async def _require_access(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    action_key: str,
+) -> bool:
+    return await consent_handlers.require_user_access(
+        update,
+        context,
+        users_lock=_users_lock,
+        load_users=_load_users,
+        action_key=action_key,
+        seed_admin_ids=SEED_ADMIN_IDS,
+    )
+
 
 def is_admin(user_id: int) -> bool:
-    """Проверить, является ли пользователь администратором."""
-    admins = _load_admins()
-    return user_id in admins
+    """Проверить, является ли пользователь администратором (файл + seed)."""
+    if user_id in SEED_ADMIN_IDS:
+        return True
+    return user_id in _load_admins()
 
 
 async def add_admin(user_id: int) -> None:
@@ -193,9 +277,6 @@ async def add_admin(user_id: int) -> None:
 # Настройки по умолчанию
 WEATHER_CITY_QUERY = "Moscow"
 WEATHER_CITY_NAME = "Москва"
-
-RATE_BASE_CURRENCIES = ["USD", "EUR", "CNY", "METALS"]  # USD, EUR, CNY, Золото/Серебро
-RATE_QUOTE_CURRENCY = "RUB"
 
 WEATHER_CODES = {
     0: "ясно",
@@ -224,7 +305,7 @@ WEATHER_CODES = {
     99: "гроза с сильным градом",
 }
 
-NOMINATIM_HEADERS = {"User-Agent": "TestELTelegramBot/1.0 (contact@example.com)"}
+NOMINATIM_HEADERS = {"User-Agent": "MaraniusBot/1.0 (aif5.ru)"}
 def get_weather_emoji(code: int, temp: Optional[float] = None) -> str:
     """Получить смайлик для погодных условий."""
     if temp is not None:
@@ -359,10 +440,8 @@ def get_moon_emoji(phase_name: str) -> str:
     return emoji_map.get(phase_name, "🌙")
 
 
-async def moon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /moon - информация о луне."""
-    await ensure_user_saved(update)
-
+def _format_moon_text() -> str:
+    """Текст блока «Луна сегодня»."""
     today = date.today()
     phases = _get_moon_data(today)
     phase_name = _moon_phase_from_data(today, phases)
@@ -376,14 +455,12 @@ async def moon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     full_this = phases["full_moon_this_cycle"]
 
     days_to_new = (next_new - today).days
-    
-    # Вычисляем дни до следующего полнолуния
+
     obs = ephem.Observer()
     obs.date = today
     next_full_date = ephem.Date(ephem.next_full_moon(obs.date)).datetime().date()
     days_to_full = (next_full_date - today).days
-    
-    # Если сегодня полнолуние (days_to_full == 0), берём следующее полнолуние после текущего цикла
+
     if days_to_full == 0:
         obs.date = next_new
         next_full_date = ephem.Date(ephem.next_full_moon(obs.date)).datetime().date()
@@ -408,8 +485,26 @@ async def moon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parts.append(f"Следующее новолуние через {days_to_new} дн.")
     if days_to_full > 0:
         parts.append(f"Следующее полнолуние через {days_to_full} дн.")
+    return "\n".join(parts)
 
-    await update.message.reply_text("\n".join(parts), parse_mode='HTML')
+
+async def moon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /moon или inline «Ещё → Луна»."""
+    await ensure_user_saved(update)
+    if not await _require_access(update, context, "moon"):
+        return
+    message = update.effective_message
+    if not message:
+        return
+    text = _format_moon_text()
+    if update.callback_query:
+        await _edit_or_reply(message, text, ui.get_back_to_more_keyboard())
+        return
+    await message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=ui.get_main_keyboard(),
+    )
 
 
 async def _get_city_from_coords(lat: float, lon: float) -> str:
@@ -447,83 +542,446 @@ async def _get_city_from_coords(lat: float, lon: float) -> str:
         return "Локация"
 
 
+async def sync_bot_commands(bot) -> int:
+    """Синее меню «☰»: default + ru, кнопка меню = список команд."""
+    commands = ui.get_bot_commands()
+    for lang in (None, "ru", "en"):
+        await bot.delete_my_commands(language_code=lang)
+    await bot.set_my_commands(commands)
+    await bot.set_my_commands(commands, language_code="ru")
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    return len(commands)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
-    await update.message.reply_text(
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message:
+        return
+
+    # До согласия не сохраняем Telegram-профиль нового пользователя.
+    # Seed-админ — внутренний служебный аккаунт.
+    if user.id not in SEED_ADMIN_IDS:
+        async with _users_lock:
+            has_policy = user_registry.has_policy(_load_users(), user.id)
+        if not has_policy:
+            context.user_data["pending_action"] = "start"
+            await consent_handlers.show_policy_gate(update, context)
+            return
+
+    await ensure_user_saved(update, bot=context.bot)
+    async with _users_lock:
+        users = _load_users()
+        if users.get(str(user.id), {}).get("bot_status") == "blocked":
+            user_registry.set_bot_status(users, user.id, "active")
+            _save_users(users)
+    if user.id in SEED_ADMIN_IDS:
+        await add_admin(user.id)
+    chat = update.effective_chat
+    if chat:
+        await context.bot.set_chat_menu_button(
+            chat_id=chat.id,
+            menu_button=MenuButtonCommands(),
+        )
+    await message.reply_text(
         ui.START_MESSAGE,
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ui.get_main_keyboard(),
     )
 
 
-def _me_fmt(value: object) -> str:
-    """Строка для вывода /me; пустые значения — длинное тире."""
-    if value is None:
-        return "—"
-    if isinstance(value, bool):
-        return "да" if value else "нет"
-    return html.escape(str(value), quote=False)
-
-
-async def me_cmd(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /me — поля User и Chat из Telegram API (как приходят в апдейте)."""
-    await ensure_user_saved(update)
+async def _open_god_panel(update: Update) -> None:
+    """Открыть корень режима бога (/god или текст god). Только seed-админы."""
+    message = update.effective_message
     user = update.effective_user
-    chat = update.effective_chat
-    if not user or not update.message:
+    if not message or not user:
+        return
+    if user.id not in SEED_ADMIN_IDS:
+        await message.reply_text(ui.ADMIN_DENIED)
+        return
+    await add_admin(user.id)
+    await message.reply_text(
+        ui.ADMIN_STUB,
+        parse_mode="HTML",
+        reply_markup=ui.get_admin_home_keyboard(),
+    )
+
+
+def _is_seed_admin(user_id: int) -> bool:
+    """Проверка только seed-админов (для /god и управления пользователями)."""
+    return user_id in SEED_ADMIN_IDS
+
+
+async def god_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Скрытый /god: только для seed/admins, без запроса кода."""
+    await ensure_user_saved(update)
+    await _open_god_panel(update)
+
+
+async def _admin_edit_panel(message, text: str, keyboard) -> None:
+    """Обновить сообщение панели или отправить новое, если edit недоступен."""
+    try:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+def _update_from_callback(query, update_id: int) -> Update:
+    """Callback: effective_user = нажавший кнопку, не бот."""
+    return Update(update_id, callback_query=query)
+
+
+def _clear_vip_awaiting(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("awaiting_vip_code", None)
+
+
+def _clear_admin_input_mode(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("admin_mode", None)
+
+
+WEATHER_LOCATION_TTL_HOURS = 4
+
+
+def _location_age_hours(updated_at: str) -> Optional[float]:
+    try:
+        last_update = datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%SZ")
+        return (datetime.utcnow() - last_update).total_seconds() / 3600
+    except Exception:
+        return None
+
+
+def _location_is_fresh(user_data: Dict[str, Any]) -> bool:
+    loc = user_data.get("last_location") or {}
+    updated_at = loc.get("updated_at")
+    if not updated_at:
+        return False
+    hours = _location_age_hours(updated_at)
+    return hours is not None and hours <= WEATHER_LOCATION_TTL_HOURS
+
+
+async def _save_weather_cache(uid: str, text: str) -> None:
+    async with _users_lock:
+        users = _load_users()
+        if uid in users:
+            users[uid]["last_weather_text"] = text
+            _save_users(users)
+
+
+
+async def _handle_card_pull(message, user_id: int) -> None:
+    uid = str(user_id)
+    async with _users_lock:
+        state = daily_practice.practice_from_user(_load_users().get(uid))
+    existing = state.get("card")
+    if existing:
+        await _edit_or_reply(
+            message,
+            ui.format_card_already(existing["title"], existing["url"]),
+            ui.get_card_hub_back_keyboard(),
+        )
         return
 
-    lines = [
-        "<b>Пользователь (Telegram User)</b>",
-        f"<code>id</code>: <code>{user.id}</code>",
-        f"<code>is_bot</code>: {_me_fmt(user.is_bot)}",
-        f"<code>first_name</code>: {_me_fmt(user.first_name)}",
-        f"<code>last_name</code>: {_me_fmt(user.last_name)}",
-        f"<code>username</code>: {_me_fmt(f'@{user.username}' if user.username else None)}",
-        f"<code>language_code</code>: {_me_fmt(user.language_code)}",
-        f"<code>is_premium</code>: {_me_fmt(getattr(user, 'is_premium', None))}",
-    ]
-    if hasattr(user, "added_to_attachment_menu"):
-        lines.append(
-            f"<code>added_to_attachment_menu</code>: "
-            f"{_me_fmt(getattr(user, 'added_to_attachment_menu', None))}"
+    await _edit_or_reply(message, ui.MSG_CARD_SHUFFLE, None)
+    await asyncio.sleep(2.5)
+    pull = daily_practice.pick_random_card()
+    if not pull:
+        await _edit_or_reply(
+            message,
+            ui.MSG_CARD_CATALOG_EMPTY,
+            ui.get_card_hub_keyboard(),
+        )
+        return
+
+    async with _users_lock:
+        users = _load_users()
+        state = daily_practice.practice_from_user(users.get(uid))
+        concurrent_existing = state.get("card")
+        if not concurrent_existing:
+            users.setdefault(uid, {"id": user_id})
+            users[uid]["daily_practice"] = daily_practice.apply_card_pull(state, pull)
+            _save_users(users)
+    if concurrent_existing:
+        await _edit_or_reply(message, ui.format_card_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard())
+        return
+
+    await _edit_or_reply(
+        message,
+        ui.format_card_success(pull["title"], pull["url"]),
+        ui.get_card_hub_back_keyboard(),
+    )
+
+
+async def _handle_crystal_pull(message, user_id: int) -> None:
+    uid = str(user_id)
+    async with _users_lock:
+        state = daily_practice.practice_from_user(_load_users().get(uid))
+    existing = state.get("crystal")
+    if existing:
+        await _edit_or_reply(
+            message,
+            ui.format_crystal_already(existing["title"], existing["url"]),
+            ui.get_card_hub_back_keyboard(),
+        )
+        return
+
+    await _edit_or_reply(message, ui.MSG_CRYSTAL_SHUFFLE, None)
+    await asyncio.sleep(2.5)
+    pull = daily_practice.pick_random_crystal()
+    if not pull:
+        await _edit_or_reply(
+            message,
+            ui.MSG_CRYSTAL_CATALOG_EMPTY,
+            ui.get_card_hub_keyboard(),
+        )
+        return
+
+    async with _users_lock:
+        users = _load_users()
+        state = daily_practice.practice_from_user(users.get(uid))
+        concurrent_existing = state.get("crystal")
+        if not concurrent_existing:
+            users.setdefault(uid, {"id": user_id})
+            users[uid]["daily_practice"] = daily_practice.apply_crystal_pull(state, pull)
+            _save_users(users)
+    if concurrent_existing:
+        await _edit_or_reply(message, ui.format_crystal_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard())
+        return
+
+    await _edit_or_reply(
+        message,
+        ui.format_crystal_success(pull["title"], pull["url"]),
+        ui.get_card_hub_back_keyboard(),
+    )
+
+
+async def _handle_dice_roll(message, user_id: int, bot) -> None:
+    uid = str(user_id)
+    async with _users_lock:
+        state = daily_practice.practice_from_user(_load_users().get(uid))
+    existing = state.get("dice")
+    if existing:
+        dice_text = dice_content.get_dice_message_html(existing["value"])
+        await message.reply_text(
+            ui.format_dice_already(dice_text),
+            parse_mode="HTML",
+        )
+        return
+
+    await message.reply_text(ui.MSG_DICE_INTRO, parse_mode="HTML")
+    dice_msg = await bot.send_dice(chat_id=message.chat_id)
+    await asyncio.sleep(3.5)
+    value = dice_msg.dice.value if dice_msg.dice else 1
+    value = value if 1 <= value <= 6 else 1
+
+    async with _users_lock:
+        users = _load_users()
+        state = daily_practice.practice_from_user(users.get(uid))
+        concurrent_existing = state.get("dice")
+        if not concurrent_existing:
+            users.setdefault(uid, {"id": user_id})
+            users[uid]["daily_practice"] = daily_practice.apply_dice_roll(state, value)
+            _save_users(users)
+
+    if concurrent_existing:
+        dice_text = dice_content.get_dice_message_html(concurrent_existing["value"])
+        await dice_msg.reply_text(ui.format_dice_already(dice_text), parse_mode="HTML")
+        return
+
+    dice_text = dice_content.get_dice_message_html(value)
+    await dice_msg.reply_text(dice_text, parse_mode="HTML")
+
+async def _edit_or_reply(
+    message,
+    text: str,
+    keyboard=None,
+    *,
+    parse_mode: Optional[str] = "HTML",
+    **extra,
+) -> None:
+    kwargs = dict(extra)
+    if parse_mode is not None:
+        kwargs["parse_mode"] = parse_mode
+    try:
+        await message.edit_text(text, reply_markup=keyboard, **kwargs)
+    except BadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return
+        await message.reply_text(text, reply_markup=keyboard, **kwargs)
+    except Exception:
+        await message.reply_text(text, reply_markup=keyboard, **kwargs)
+
+
+async def _reply_screen(
+    update: Update,
+    text: str,
+    *,
+    parse_mode: str = "HTML",
+    inline_markup=None,
+    protect: bool = False,
+    disable_web_page_preview: bool = False,
+) -> None:
+    """Ответ экраном: inline отдельно; без inline — с нижним меню."""
+    message = update.effective_message
+    if not message:
+        return
+    extra = PROTECT_KWARGS if protect else {}
+    if inline_markup:
+        await message.reply_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=inline_markup,
+            disable_web_page_preview=disable_web_page_preview,
+            **extra,
+        )
+    else:
+        await message.reply_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=ui.get_main_keyboard(),
+            disable_web_page_preview=disable_web_page_preview,
+            **extra,
         )
 
-    lines.append("")
-    lines.append("<b>Чат (Telegram Chat)</b>")
-    if chat:
-        lines.append(f"<code>id</code>: <code>{chat.id}</code>")
-        lines.append(f"<code>type</code>: {_me_fmt(chat.type)}")
-        lines.append(f"<code>title</code>: {_me_fmt(chat.title)}")
-        lines.append(f"<code>username</code>: {_me_fmt(f'@{chat.username}' if chat.username else None)}")
-    else:
-        lines.append("—")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+def _user_is_vip(user_id: int) -> bool:
+    return user_registry.is_vip(_load_users(), user_id, seed_admin_ids=SEED_ADMIN_IDS)
 
 
-async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка команды /admin - режим бога."""
-    await ensure_user_saved(update)
+async def _grant_vip_user(user_id: int, *, source: str = "code") -> None:
+    async with _users_lock:
+        users = _load_users()
+        user_registry.grant_vip(users, user_id, source=source)
+        _save_users(users)
+
+
+async def show_vip_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """VIP: приветствие или запрос кода."""
+    if not await _require_access(update, context, "vip"):
+        return
     user = update.effective_user
     if not user:
         return
-
-    user_id = user.id
-
-    # Проверка, является ли пользователь администратором
-    if is_admin(user_id):
-        # Показываем админ-панель с кнопками в нижней панели
-        await update.message.reply_text(
-            ui.ADMIN_PANEL_TITLE,
-            reply_markup=ui.get_admin_keyboard(),
+    if _user_is_vip(user.id):
+        context.user_data.pop("awaiting_vip_code", None)
+        await _reply_screen(
+            update,
+            vip_content.vip_home_html(),
+            inline_markup=vip_content.deck_menu_keyboard(),
+            protect=True,
         )
-    else:
-        # Запрашиваем код доступа и устанавливаем флаг ожидания
-        context.user_data["waiting_admin_code"] = True
-        await update.message.reply_text(
-            ui.ADMIN_ASK_CODE,
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        return
+    context.user_data["awaiting_vip_code"] = True
+    text = f"<b>{ui.BTN_VIP}</b>\n\n{vip_content.no_access_html()}"
+    await _reply_screen(update, text, protect=True)
+
+
+async def show_vip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    await show_vip_home(update, context)
+
+
+async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    if not await _require_access(update, context, "today"):
+        return
+    _clear_vip_awaiting(context)
+    await _reply_screen(
+        update,
+        ui.MSG_TODAY,
+        inline_markup=ui.get_today_inline_keyboard(),
+    )
+
+
+async def show_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    if not await _require_access(update, context, "store"):
+        return
+    _clear_vip_awaiting(context)
+    text = (
+        f"{ui.MSG_STORE_STUB}\n\n"
+        f'<a href="{ui.URL_CATALOG}">Открыть каталог</a>'
+    )
+    await _reply_screen(update, text)
+
+
+async def show_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    if not await _require_access(update, context, "more"):
+        return
+    _clear_vip_awaiting(context)
+    await _reply_screen(update, ui.MSG_MORE, inline_markup=ui.get_more_inline_keyboard())
+
+
+async def show_contact(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    await _reply_screen(
+        update,
+        ui.MSG_CONTACT,
+        inline_markup=ui.get_contact_inline_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def show_services(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    await _reply_screen(
+        update,
+        ui.MSG_SERVICES,
+        inline_markup=ui.get_services_inline_keyboard(),
+    )
+
+
+async def show_learning(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    await _reply_screen(update, ui.MSG_LEARNING)
+
+
+async def show_info(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    await _reply_screen(update, ui.MSG_INFO_FAQ)
+
+
+async def show_policy(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    await ensure_user_saved(update)
+    users = _load_users()
+    user = update.effective_user
+    with_marketing = bool(user and user_registry.has_policy(users, user.id))
+    message = update.effective_message
+    if not message:
+        return
+    await message.reply_text(
+        ui.MSG_POLICY_FULL,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=ui.get_policy_keyboard(with_marketing=with_marketing),
+    )
+
+
+async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_today(update, context)
+
+
+async def vip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_vip(update, context)
+
+
+async def store_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_store(update, context)
+
+
+async def contact_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_contact(update, context)
+
+
+async def learning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_learning(update, context)
+
+
+async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_info(update, context)
+
+
+async def policy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_policy(update, context)
 
 
 
@@ -537,7 +995,15 @@ def _format_time_iso(iso_str: str) -> str:
     return iso_str.split("T")[1][:5]
 
 
-async def _weather_at_coords(lat: float, lon: float, place_name: str, updated_at: Optional[str] = None, timezone_str: Optional[str] = None) -> Optional[str]:
+async def _weather_at_coords(
+    lat: float,
+    lon: float,
+    place_name: str,
+    updated_at: Optional[str] = None,
+    timezone_str: Optional[str] = None,
+    *,
+    fetched_at: Optional[datetime] = None,
+) -> Optional[str]:
     """Запрос погоды через Open-Meteo: сейчас + давление, влажность, восход/закат, луна, завтра."""
     url = (
         "https://api.open-meteo.com/v1/forecast"
@@ -662,505 +1128,1039 @@ async def _weather_at_coords(lat: float, lon: float, place_name: str, updated_at
             parts.append(f"  🌧️ Вероятность осадков: {d_precip_prob[1]}%")
 
     # Время обновления в самом низу
-    if updated_at:
+    stamp = fetched_at
+    if stamp is None and updated_at:
         try:
-            utc_time = datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%SZ")
-            local_time_str = _format_local_time(utc_time, timezone_str)
-            parts.append("")
-            parts.append(f"Обновлено: {local_time_str}")
+            stamp = datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%SZ")
         except Exception:
-            pass
+            stamp = None
+    if stamp is None:
+        stamp = datetime.utcnow()
+    parts.append("")
+    parts.append(f"Обновлено: {_format_local_time(stamp, timezone_str)}")
 
     return "\n".join(parts)
-async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
-    user = update.effective_user
-    if not user:
-        return
-    
-    uid = str(user.id)
-    users = _load_users()
-    user_data = users.get(uid, {})
-    
-    # Проверяем, есть ли сохраненная локация
-    if "last_location" in user_data:
-        loc = user_data["last_location"]
-        lat = loc["lat"]
-        lon = loc["lon"]
-        updated_at = loc.get("updated_at")
-        timezone_str = user_data.get("timezone")
-        
-        # Проверяем, прошло ли более 14 часов с последнего обновления локации
-        location_expired = False
-        if updated_at:
-            try:
-                last_update = datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%SZ")
-                hours_passed = (datetime.utcnow() - last_update).total_seconds() / 3600
-                if hours_passed > 14:  # Больше 14 часов
-                    location_expired = True
-            except Exception:
-                location_expired = True
-        
-        # Если локация устарела, запрашиваем новую
-        if location_expired:
-            await weather_here(update, context)
-            return
-        
-        # Получаем название места по координатам
-        place_name = await _get_city_from_coords(lat, lon)
-        if not place_name or place_name == "Локация":
-            place_name = f"({lat:.4f}, {lon:.4f})"
-        
-        # Показываем погоду по последней локации
-        text = await _weather_at_coords(lat, lon, place_name, updated_at, timezone_str)
-        if not text:
-            await update.message.reply_text(ui.MSG_WEATHER_FETCH_FAIL)
-            return
-        
-        # Добавляем кнопку для обновления локации
-        keyboard = ui.get_weather_refresh_keyboard()
-        await update.message.reply_text(text, reply_markup=keyboard, parse_mode='HTML')
-    else:
-        # Если локации нет, запрашиваем её
-        await weather_here(update, context)
 
 
-async def weather_here(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
-    keyboard = ui.get_weather_share_keyboard()
-    await update.message.reply_text(
+async def _weather_ask_location(message) -> None:
+    await message.reply_text(
         ui.MSG_WEATHER_ASK_LOCATION,
-        reply_markup=keyboard,
+        parse_mode="HTML",
+        reply_markup=ui.get_weather_share_keyboard(),
     )
+
+
+async def _weather_ask_location_expired(message) -> None:
+    await message.reply_text(
+        ui.MSG_WEATHER_LOCATION_EXPIRED,
+        parse_mode="HTML",
+        reply_markup=ui.get_weather_share_keyboard(),
+    )
+
+
+async def _weather_fetch_and_send(update: Update, user_data: Dict[str, Any]) -> None:
+    """Запрос API по сохранённым coords, если кэша текста ещё нет."""
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    uid = str(user.id)
+    loc = user_data.get("last_location") or {}
+    lat, lon = loc.get("lat"), loc.get("lon")
+    if lat is None or lon is None:
+        await _weather_ask_location(message)
+        return
+    place_name = await _get_city_from_coords(lat, lon)
+    if not place_name or place_name == "Локация":
+        place_name = f"({lat:.4f}, {lon:.4f})"
+    text = await _weather_at_coords(
+        lat,
+        lon,
+        place_name,
+        loc.get("updated_at"),
+        user_data.get("timezone"),
+        fetched_at=datetime.utcnow(),
+    )
+    main_kb = ui.get_main_keyboard()
+    if not text:
+        await message.reply_text(ui.MSG_WEATHER_FETCH_FAIL, reply_markup=main_kb)
+        return
+    await _save_weather_cache(uid, text)
+    await message.reply_text(text, parse_mode="HTML", reply_markup=main_kb)
+
+
+async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ещё → Погода: всегда новое сообщение, прогноз без inline-кнопок."""
+    await ensure_user_saved(update)
+    if not await _require_access(update, context, "weather"):
+        return
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+
+    uid = str(user.id)
+    user_data = _load_users().get(uid, {})
+    main_kb = ui.get_main_keyboard()
+
+    if "last_location" not in user_data:
+        await _weather_ask_location(message)
+        return
+
+    if not _location_is_fresh(user_data):
+        await _weather_ask_location_expired(message)
+        return
+
+    cached = user_data.get("last_weather_text")
+    if cached:
+        hint = ui.MSG_WEATHER_CACHE_HINT.strip()
+        display = cached if hint in cached else cached + ui.MSG_WEATHER_CACHE_HINT
+        await message.reply_text(display, parse_mode="HTML", reply_markup=main_kb)
+        return
+
+    await _weather_fetch_and_send(update, user_data)
+
+
+async def weather_ask_new_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Смена места до истечения 4 ч."""
+    message = update.effective_message
+    if not message:
+        return
+    await _weather_ask_location(message)
 
 
 async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.location:
         return
-    
-    # Сохраняем пользователя с локацией (ensure_user_saved сохранит локацию)
+
+    if not await _require_access(update, context, "weather"):
+        return
     await ensure_user_saved(update)
-    
+
     user = update.effective_user
     if not user:
         return
-    
+
     uid = str(user.id)
-    users = _load_users()
-    user_data = users.get(uid, {})
-    
-    remove_kb = ReplyKeyboardRemove()
+    user_data = _load_users().get(uid, {})
+    main_kb = ui.get_main_keyboard()
+
     try:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
+        await _save_user_location(uid, lat, lon)
+        user_data = _load_users().get(uid, {})
         place_name = await _get_city_from_coords(lat, lon)
         if not place_name or place_name == "Локация":
             place_name = f"({lat:.4f}, {lon:.4f})"
-        
-        # Получаем время обновления и часовой пояс
-        updated_at = None
-        timezone_str = None
-        if "last_location" in user_data:
-            updated_at = user_data["last_location"].get("updated_at")
-        if "timezone" in user_data:
-            timezone_str = user_data["timezone"]
-        
-        text = await _weather_at_coords(lat, lon, place_name, updated_at, timezone_str)
+
+        text = await _weather_at_coords(
+            lat,
+            lon,
+            place_name,
+            user_data.get("last_location", {}).get("updated_at"),
+            user_data.get("timezone"),
+            fetched_at=datetime.utcnow(),
+        )
         if not text:
             await update.message.reply_text(
                 ui.MSG_WEATHER_GEO_FAIL,
-                reply_markup=remove_kb,
+                reply_markup=main_kb,
             )
             return
-        await update.message.reply_text(text, reply_markup=remove_kb, parse_mode='HTML')
+
+        await _save_weather_cache(uid, text)
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=main_kb,
+        )
     except Exception as e:
         print(f"Ошибка погода по геолокации: {e!r}")
         await update.message.reply_text(
             ui.MSG_WEATHER_GEO_FAIL,
-            reply_markup=remove_kb,
+            reply_markup=main_kb,
         )
 
 
-async def rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
-    keyboard = ui.get_rate_inline_keyboard(RATE_BASE_CURRENCIES[:3])
+
+async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str) -> None:
+    """Ответ расшифровкой ангельского знака из локальных CSV."""
+    if not update.message:
+        return
+    context.user_data["pending_angel_key"] = key
+    if not await _require_access(update, context, "angel"):
+        return
+    context.user_data.pop("pending_angel_key", None)
+    meaning, normalized = ewasml_services.lookup_angelic_sign(key)
+    if meaning:
+        display = normalized if normalized != key.strip() else key.strip()
+        text = ui.format_angelic_sign(display, meaning)
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=ui.get_main_keyboard(),
+            **PROTECT_KWARGS,
+        )
+        return
+
+    user = update.effective_user
+    if user:
+        entry = await ewasml_services.log_unknown_angelic(
+            key,
+            normalized,
+            user_id=user.id,
+            username=user.username,
+        )
+        if not entry.get("admin_notified_at"):
+            sent = await admin_alerts.notify_inbox_entry(
+                context.bot,
+                SEED_ADMIN_IDS,
+                user_id=user.id,
+                username=user.username,
+                entry_type="unknown_angel",
+                text=key.strip(),
+            )
+            if sent:
+                await inbox_mod.mark_notified(entry["id"])
     await update.message.reply_text(
-        ui.rate_choose_prompt(RATE_QUOTE_CURRENCY),
-        reply_markup=keyboard,
+        ui.MSG_ANGEL_NOT_FOUND.format(sign=key.strip()),
+        parse_mode="HTML",
+        reply_markup=ui.get_main_keyboard(),
+        **PROTECT_KWARGS,
     )
 
 
-async def _fetch_rate(base_currency: str, quote_currency: str) -> Optional[float]:
-    """Получить текущий курс валют через ExchangeRate-API или API ЦБ РФ для золота/серебра."""
-    # Для золота и серебра используем API ЦБ РФ
-    if base_currency in ("XAU", "XAG"):
-        today = date.today()
-        return await _fetch_historical_rate(base_currency, quote_currency, today)
-    
-    # Для остальных валют используем ExchangeRate-API
-    url = f"https://open.er-api.com/v6/latest/{base_currency}"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("result") != "success":
-                return None
-            rates = data.get("rates") or {}
-            if quote_currency not in rates:
-                return None
-            return float(rates[quote_currency])
-    except Exception as e:
-        print(f"Ошибка при запросе курса: {e!r}")
-        return None
+
+def _is_admin_unknown_angels_cmd(text: str) -> Optional[str]:
+    """Legacy: перенаправление на inbox."""
+    raw = (text or "").strip().casefold()
+    if raw == ui.ADMIN_CMD_UNKNOWN_ANGELS.casefold():
+        return "summary"
+    if raw == ui.ADMIN_CMD_UNKNOWN_ANGELS_FILE.casefold():
+        return "file"
+    return None
 
 
-async def _fetch_historical_rate(base_currency: str, quote_currency: str, target_date: date) -> Optional[float]:
-    """Получить исторический курс валют через API Центробанка России."""
-    # Проверяем, что дата не в будущем
-    today = date.today()
-    if target_date > today:
-        return None
-    
-    # Для золота и серебра используем отдельный endpoint драгоценных металлов
-    if base_currency in ("XAU", "XAG"):
-        date_str = target_date.strftime("%d/%m/%Y")
-        url = f"https://www.cbr.ru/scripts/xml_metall.asp?date_req1={date_str}&date_req2={date_str}"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                root = ET.fromstring(response.text)
-                # Ищем нужный металл (золото или серебро)
-                metal_code = "1" if base_currency == "XAU" else "2"  # 1 - золото, 2 - серебро
-                for record in root.findall("Record"):
-                    code = record.get("Code")
-                    if code == metal_code:
-                        buy_elem = record.find("Buy")
-                        if buy_elem is not None:
-                            # Цена за грамм в рублях
-                            price_str = buy_elem.text.replace(",", ".")
-                            return float(price_str)
-                return None
-        except Exception as e:
-            print(f"Ошибка при запросе курса драгоценных металлов через ЦБ РФ: {e!r}")
-            return None
-    
-    # Для остальных валют используем стандартный API ЦБ РФ
-    date_str = target_date.strftime("%d/%m/%Y")
-    url = f"https://www.cbr.ru/scripts/XML_daily.asp?date_req={date_str}"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            # Парсим XML ответ
-            root = ET.fromstring(response.text)
-            # Ищем нужную валюту
-            for valute in root.findall("Valute"):
-                char_code = valute.find("CharCode")
-                if char_code is not None and char_code.text == base_currency:
-                    value_elem = valute.find("Value")
-                    nominal_elem = valute.find("Nominal")
-                    if value_elem is not None and nominal_elem is not None:
-                        # Значение в формате "XX,XXXX" (запятая как разделитель)
-                        value_str = value_elem.text.replace(",", ".")
-                        nominal = int(nominal_elem.text)
-                        # Курс за 1 единицу валюты к рублю
-                        rate = float(value_str) / nominal
-                        return rate
-            return None
-    except Exception as e:
-        print(f"Ошибка при запросе исторического курса через ЦБ РФ: {e!r}")
-        return None
-
-def _calculate_percentage_change(current: float, previous: float) -> str:
-    """Рассчитать процент изменения курса."""
-    if previous == 0:
-        return "—"
-    change = ((current - previous) / previous) * 100
-    if change > 0:
-        return f"+{change:.2f}%"
-    return f"{change:.2f}%"
+def _user_stats() -> Dict[str, int]:
+    return user_registry.stats_summary(_load_users())
 
 
-async def rate_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка нажатия на кнопку валюты."""
-    query = update.callback_query
-    if not query:
-        return
-    
-    await query.answer()
-    await ensure_user_saved(update)
-    
-    base_currency = query.data.split(":")[1]
-    quote_currency = RATE_QUOTE_CURRENCY
-    
-    # Получаем смайлики для валют
-    currency_emoji = {
-        "USD": "💵",
-        "EUR": "💶",
-        "GBP": "💷",
-        "JPY": "💴",
-        "CNY": "💰",
-        "XAU": "🥇",  # Золото
-        "XAG": "🥈",  # Серебро
-        "RUB": "💸"
-    }
-    quote_emoji = currency_emoji.get(quote_currency, "💱")
-    
-    # Специальная обработка для золота и серебра
-    if base_currency == "METALS":
-        # Получаем оба курса (золото и серебро)
-        xau_rate = await _fetch_rate("XAU", quote_currency)
-        xag_rate = await _fetch_rate("XAG", quote_currency)
-        
-        if xau_rate is None or xag_rate is None:
-            await query.edit_message_text(ui.MSG_RATE_METALS_FAIL)
-            return
-        
-        # Формируем сообщение с обоими курсами
-        parts = [
-            f"<b>{currency_emoji['XAU']} Курс XAU/{quote_currency}:</b>",
-            f"  1 XAU = {xau_rate:.2f} {quote_currency}",
-            "",
-            f"<b>{currency_emoji['XAG']} Курс XAG/{quote_currency}:</b>",
-            f"  1 XAG = {xag_rate:.2f} {quote_currency}",
-        ]
-        
-        # Добавляем время обновления в самом низу
-        user = update.effective_user
-        if user:
-            uid = str(user.id)
-            users = _load_users()
-            user_data = users.get(uid, {})
-            timezone_str = user_data.get("timezone")
-            now_utc = datetime.utcnow()
-            local_time_str = _format_local_time(now_utc, timezone_str)
-            parts.append("")
-            parts.append(f"🕐 Обновлено: {local_time_str}")
-        
-        await query.edit_message_text("\n".join(parts), parse_mode='HTML')
-        return
-    
-    # Для остальных валют
-    # Получаем текущий курс
-    current_rate = await _fetch_rate(base_currency, quote_currency)
-    if current_rate is None:
-        await query.edit_message_text(ui.MSG_RATE_CURRENCY_FAIL)
-        return
-    
-    # Получаем исторические курсы
-    today = date.today()
-    week_ago = today - timedelta(days=7)
-    month_ago = today - timedelta(days=30)
-    year_ago = today - timedelta(days=365)
-    
-    week_rate = await _fetch_historical_rate(base_currency, quote_currency, week_ago)
-    month_rate = await _fetch_historical_rate(base_currency, quote_currency, month_ago)
-    year_rate = await _fetch_historical_rate(base_currency, quote_currency, year_ago)
-    
-    base_emoji = currency_emoji.get(base_currency, "💱")
-    
-    # Формируем сообщение
-    parts = [
-        f"<b>{base_emoji} Курс {base_currency}/{quote_currency}:</b>",
-        f"  1 {base_currency} = {current_rate:.2f} {quote_currency}",
-        f"  100 {base_currency} = {current_rate * 100:.2f} {quote_currency}",
-        "",
-        "📊 История:",
-    ]
-    
-    if week_rate:
-        change = _calculate_percentage_change(current_rate, week_rate)
-        diff_abs = current_rate - week_rate
-        parts.append(f"  Неделя назад: {week_rate:.2f} {quote_currency} ({change}, {diff_abs:+.2f})")
-    else:
-        parts.append("  Неделя назад: данные недоступны")
-    
-    if month_rate:
-        change = _calculate_percentage_change(current_rate, month_rate)
-        diff_abs = current_rate - month_rate
-        parts.append(f"  Месяц назад: {month_rate:.2f} {quote_currency} ({change}, {diff_abs:+.2f})")
-    else:
-        parts.append("  Месяц назад: данные недоступны")
-    
-    if year_rate:
-        change = _calculate_percentage_change(current_rate, year_rate)
-        diff_abs = current_rate - year_rate
-        parts.append(f"  Год назад: {year_rate:.2f} {quote_currency} ({change}, {diff_abs:+.2f})")
-    else:
-        parts.append("  Год назад: данные недоступны")
-    
-    # Добавляем время обновления в самом низу
+async def _admin_guard(update: Update) -> bool:
+    """Guard для inline-кнопок /god: только seed-админы."""
     user = update.effective_user
-    if user:
-        uid = str(user.id)
+    if not user and update.callback_query:
+        user = update.callback_query.from_user
+    if user and user.id in SEED_ADMIN_IDS:
+        return True
+    message = update.effective_message
+    if message:
+        await message.reply_text(ui.ADMIN_DENIED)
+    return False
+
+
+async def admin_inbox(update: Update, mode: str) -> None:
+    """Сводка или CSV inbox (только seed-admin)."""
+    message = update.effective_message
+    if not message or not await _admin_guard(update):
+        return
+
+    total, unnotified = await inbox_mod.stats()
+    if total == 0:
+        await message.reply_text(
+            ui.ADMIN_INBOX_EMPTY,
+            reply_markup=ui.get_admin_inbox_keyboard(),
+        )
+        return
+
+    if mode == "summary":
+        await message.reply_text(
+            ui.ADMIN_INBOX_SUMMARY.format(total=total, unnotified=unnotified),
+            parse_mode="HTML",
+            reply_markup=ui.get_admin_inbox_keyboard(),
+        )
+        return
+
+    csv_bytes, ts = await inbox_mod.export_csv_bytes()
+    import io
+
+    await message.reply_document(
+        document=InputFile(io.BytesIO(csv_bytes), filename="inbox.csv"),
+        caption=f"Inbox: {total} записей, скачано {ts}",
+        reply_markup=ui.get_admin_inbox_keyboard(),
+    )
+
+
+async def admin_unknown_angels(update: Update, mode: str) -> None:
+    """Legacy alias → inbox."""
+    await admin_inbox(update, mode)
+
+
+async def admin_export_list(update: Update, segment: Optional[str]) -> None:
+    message = update.effective_message
+    if not message or not await _admin_guard(update):
+        return
+    data = user_registry.export_users_csv(_load_users(), segment=segment)
+    import io
+
+    name = f"users_{segment or 'all'}.csv"
+    await message.reply_document(
+        document=InputFile(io.BytesIO(data), filename=name),
+        caption=f"Сегмент: {segment or 'all'}",
+        reply_markup=ui.get_admin_lists_keyboard(),
+    )
+
+
+async def _admin_exec_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd: str, uid: int) -> None:
+    """Выполнить vip/block команду после подтверждения."""
+    async with _users_lock:
         users = _load_users()
-        user_data = users.get(uid, {})
-        timezone_str = user_data.get("timezone")
-        now_utc = datetime.utcnow()
-        local_time_str = _format_local_time(now_utc, timezone_str)
-        parts.append("")
-        parts.append(f"🕐 Обновлено: {local_time_str}")
-    
-    await query.edit_message_text("\n".join(parts), parse_mode='HTML')
+        action = ""
+        if cmd in ("vip", "grant_vip"):
+            user_registry.grant_vip(users, uid, source="admin_grant")
+            action = "VIP выдан"
+        elif cmd in ("unvip", "revoke_vip"):
+            user_registry.revoke_vip(users, uid)
+            action = "VIP снят"
+        elif cmd == "block":
+            user_registry.set_admin_blocked(users, uid, True)
+            action = "заблокирован"
+        elif cmd == "unblock":
+            user_registry.set_admin_blocked(users, uid, False)
+            action = "разблокирован"
+        _save_users(users)
+
+    if cmd in ("vip", "grant_vip"):
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=ui.MSG_VIP_APPROVE_USER,
+                parse_mode="HTML",
+                reply_markup=ui.get_main_keyboard(),
+            )
+        except Exception as exc:
+            print(f"VIP notify user {uid}: {exc!r}")
+
+    message = update.effective_message
+    if message:
+        await message.reply_text(
+            ui.ADMIN_USER_CMD_OK.format(action=action, target=uid),
+            parse_mode="HTML",
+            reply_markup=ui.get_admin_users_manage_keyboard(),
+        )
+
+
+async def _admin_apply_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """vip/block команды из режима бога. Returns True если обработано или запрос подтверждения отправлен."""
+    parts = text.split()
+    if len(parts) < 2:
+        return False
+    cmd = parts[0].casefold()
+    target_raw = parts[1]
+    uid = user_registry.parse_user_ref(target_raw)
+    if uid is None:
+        uid = user_registry.find_user_id_by_username(_load_users(), target_raw)
+    if uid is None:
+        await update.message.reply_text(
+            ui.ADMIN_USER_CMD_FAIL.format(target=target_raw),
+            parse_mode="HTML",
+        )
+        return True
+
+    action_map = {
+        "vip": "VIP выдать",
+        "grant_vip": "VIP выдать",
+        "unvip": "VIP снять",
+        "revoke_vip": "VIP снять",
+        "block": "заблокировать",
+        "unblock": "разблокировать",
+    }
+    if cmd not in action_map:
+        return False
+
+    context.user_data["admin_confirm"] = {"cmd": cmd, "target": uid}
+    await update.message.reply_text(
+        ui.ADMIN_CONFIRM_PROMPT.format(action=action_map[cmd], target=uid),
+        parse_mode="HTML",
+        reply_markup=ui.get_admin_confirm_keyboard(),
+    )
+    return True
+
+
+async def admin_users_summary(update: Update) -> None:
+    message = update.effective_message
+    if not message or not await _admin_guard(update):
+        return
+    st = _user_stats()
+    await message.reply_text(
+        ui.ADMIN_USERS_SUMMARY.format(
+            total=st["total"],
+            real=st["real"],
+            week=st["new_7d"],
+            vip=st["vip"],
+            no_policy=st["no_policy"],
+            marketing=st["marketing"],
+            sleeping=st["sleeping"],
+        ),
+        parse_mode="HTML",
+        reply_markup=ui.get_admin_bot_keyboard(),
+    )
+
+
+async def admin_bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message or not await _admin_guard(update):
+        return
+    me = await context.bot.get_me()
+    username = me.username or "?"
+    cmd_count = len(ui.get_bot_commands())
+    await message.reply_text(
+        ui.ADMIN_STATUS.format(
+            profile=BOT_PROFILE_ACTIVE,
+            username=username,
+            cmd_count=cmd_count,
+        ),
+        parse_mode="HTML",
+        reply_markup=ui.get_admin_bot_keyboard(),
+    )
+
+
+async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline-кнопки режима бога."""
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    await query.answer()
+    if not await _admin_guard(update):
+        return
+    data = query.data or ""
+
+    if data == ui.CB_ADMIN_HOME:
+        await _admin_edit_panel(query.message, ui.ADMIN_STUB, ui.get_admin_home_keyboard())
+        return
+    if data == ui.CB_ADMIN_MENU_INBOX or data == ui.CB_ADMIN_MENU_ANGELS:
+        await _admin_edit_panel(
+            query.message, ui.ADMIN_MENU_INBOX, ui.get_admin_inbox_keyboard()
+        )
+        return
+    if data == ui.CB_ADMIN_MENU_LISTS:
+        await _admin_edit_panel(
+            query.message, ui.ADMIN_LISTS_HINT, ui.get_admin_lists_keyboard()
+        )
+        return
+    if data == ui.CB_ADMIN_MENU_USERS:
+        await _admin_edit_panel(
+            query.message, ui.ADMIN_MENU_USERS, ui.get_admin_users_manage_keyboard()
+        )
+        return
+    if data == ui.CB_ADMIN_MENU_BOT:
+        await _admin_edit_panel(query.message, ui.ADMIN_MENU_BOT, ui.get_admin_bot_keyboard())
+        return
+    if data == ui.CB_ADMIN_MENU_VIP:
+        await _admin_edit_panel(query.message, ui.ADMIN_MENU_VIP, ui.get_admin_vip_keyboard())
+        return
+
+    if data in (ui.CB_ADMIN_UNKNOWN, ui.CB_ADMIN_INBOX):
+        await admin_inbox(update, "summary")
+        return
+    if data in (ui.CB_ADMIN_UNKNOWN_CSV, ui.CB_ADMIN_INBOX_CSV):
+        await admin_inbox(update, "file")
+        return
+    if data == ui.CB_ADMIN_LIST_ALL:
+        await admin_export_list(update, None)
+        return
+    if data.startswith(ui.CB_ADMIN_LIST_SEGMENT_PREFIX) and data != ui.CB_ADMIN_LIST_ALL:
+        seg = data[len(ui.CB_ADMIN_LIST_SEGMENT_PREFIX) :]
+        await admin_export_list(update, seg)
+        return
+    if data == ui.CB_ADMIN_USERS:
+        await admin_users_summary(update)
+        return
+    if data == ui.CB_ADMIN_STATUS:
+        await admin_bot_status(update, context)
+        return
+    if data == ui.CB_ADMIN_VIP:
+        await vip_handlers.admin_vip_summary(update, _admin_guard)
+        return
+    if data == ui.CB_ADMIN_VIP_EXPORT:
+        await vip_handlers.admin_vip_export(update, _admin_guard)
+        return
+    if data == ui.CB_ADMIN_VIP_ADD:
+        await vip_handlers.admin_vip_add_prompt(update, context, _admin_guard)
+        return
+    if data == ui.CB_ADMIN_VIP_IMPORT:
+        await vip_handlers.admin_vip_import_prompt(update, context, _admin_guard)
+        return
+    if data == ui.CB_ADMIN_VIP_CANCEL:
+        _clear_admin_input_mode(context)
+        await _admin_edit_panel(
+            query.message,
+            ui.ADMIN_MENU_VIP,
+            ui.get_admin_vip_keyboard(),
+        )
+        return
+    if data == ui.CB_ADMIN_CONFIRM:
+        confirm = context.user_data.pop("admin_confirm", None)
+        if confirm:
+            await _admin_exec_user_cmd(update, context, confirm["cmd"], confirm["target"])
+        else:
+            await _admin_edit_panel(
+                query.message, ui.ADMIN_MENU_USERS, ui.get_admin_users_manage_keyboard()
+            )
+        return
+    if data == ui.CB_ADMIN_CANCEL:
+        context.user_data.pop("admin_confirm", None)
+        await _admin_edit_panel(
+            query.message, ui.ADMIN_MENU_USERS, ui.get_admin_users_manage_keyboard()
+        )
+        return
+
+
+async def vip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await vip_handlers.vip_menu_callback(
+        update,
+        context,
+        is_vip=_user_is_vip,
+        protect_kwargs=PROTECT_KWARGS,
+    )
+
+
+async def vip_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _grant(uid: int) -> None:
+        await _grant_vip_user(uid, source="admin_grant")
+
+    await vip_handlers.vip_approve_callback(
+        update,
+        context,
+        admin_guard=_admin_guard,
+        grant_vip=_grant,
+    )
+
+
+async def today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline-кнопки экрана «Сегодня»."""
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    await query.answer()
+    if not await _require_access(update, context, "today"):
+        return
+    _clear_vip_awaiting(context)
+    data = query.data or ""
+    msg = query.message
+
+    if data == ui.CB_TODAY_HOME:
+        await _edit_or_reply(msg, ui.MSG_TODAY, ui.get_today_inline_keyboard())
+        return
+
+    if data == ui.CB_TODAY_ANGEL:
+        await _edit_or_reply(msg, ui.MSG_ANGEL_INSTRUCTION, ui.get_today_back_keyboard())
+        return
+
+    if data == ui.CB_TODAY_CARD or data == ui.CB_CARD_BACK:
+        await _edit_or_reply(
+            msg,
+            ui.MSG_CARD_HUB,
+            ui.get_card_hub_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data == ui.CB_TODAY_DICE:
+        user = query.from_user
+        if user:
+            await _handle_dice_roll(msg, user.id, context.bot)
+        return
+
+    if data == ui.CB_CARD_PULL:
+        user = query.from_user
+        if user:
+            await _handle_card_pull(msg, user.id)
+        return
+
+    if data == ui.CB_CRYSTAL_PULL:
+        user = query.from_user
+        if user:
+            await _handle_crystal_pull(msg, user.id)
+        return
+
+
+
+async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline-кнопки экрана «Ещё»."""
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    await query.answer()
+    if not await _require_access(update, context, "more"):
+        return
+    _clear_vip_awaiting(context)
+    data = query.data or ""
+    msg = query.message
+    cb_update = _update_from_callback(query, update.update_id)
+
+    if data == ui.CB_MORE_HOME:
+        await _edit_or_reply(msg, ui.MSG_MORE, ui.get_more_inline_keyboard())
+        return
+
+    if data == ui.CB_WEATHER:
+        await weather(cb_update, context)
+        return
+    if data == ui.CB_MOON:
+        await moon_cmd(cb_update, context)
+        return
+    if data == ui.CB_SERVICES:
+        await _edit_or_reply(
+            msg,
+            ui.MSG_SERVICES,
+            ui.get_services_inline_keyboard(with_back=True),
+        )
+        return
+    if data == ui.CB_LEARNING:
+        await _edit_or_reply(
+            msg,
+            ui.MSG_LEARNING,
+            ui.get_back_to_more_keyboard(),
+        )
+        return
+    if data == ui.CB_INFO:
+        await _edit_or_reply(msg, ui.MSG_INFO_FAQ, ui.get_back_to_more_keyboard())
+        return
+    if data == ui.CB_POLICY:
+        user = query.from_user
+        users = _load_users()
+        with_marketing = bool(user and user_registry.has_policy(users, user.id))
+        await _edit_or_reply(
+            msg,
+            ui.MSG_POLICY_FULL,
+            ui.get_policy_keyboard(with_marketing=with_marketing),
+            disable_web_page_preview=True,
+        )
+        return
+
+
+
+async def _notify_duplicate_vip(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    username: Optional[str],
+    code: str,
+    owner: Dict[str, Any],
+) -> None:
+    orig_id = int(owner.get("user_id") or 0)
+    await admin_alerts.notify_duplicate_vip_code(
+        context.bot,
+        SEED_ADMIN_IDS,
+        code=code,
+        original_user_id=orig_id,
+        original_username=owner.get("username"),
+        original_used_at=str(owner.get("used_at") or ""),
+        attempter_id=user_id,
+        attempter_username=username,
+    )
+    await inbox_mod.add_entry(
+        entry_type="duplicate_vip_code",
+        user_id=user_id,
+        username=username,
+        text=code,
+        meta={"original_user_id": orig_id, "original_username": owner.get("username")},
+    )
+
+
+async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    mc = update.my_chat_member
+    if not mc or not mc.chat or mc.chat.type != "private":
+        return
+    user = mc.new_chat_member.user
+    if not user or user.is_bot:
+        return
+    status = mc.new_chat_member.status
+    async with _users_lock:
+        users = _load_users()
+        if status in ("kicked", "banned"):
+            user_registry.set_bot_status(users, user.id, "blocked")
+        elif status == "member":
+            user_registry.set_bot_status(users, user.id, "active")
+        _save_users(users)
+
+
+def _format_report_text(*, title: str, st: Dict[str, int], inbox_total: int) -> str:
+    top = analytics.top_sections(7)
+    top_lines = ", ".join(f"{k}: {v}" for k, v in top) if top else "—"
+    return (
+        f"<b>{title}</b>\n"
+        f"Пользователи (real): {st['real']} (+{st['new_7d']} за 7д)\n"
+        f"Активные 7/30д: {st['active_7']} / {st['active_30']}\n"
+        f"Спящие (&gt;30д): {st['sleeping']}\n"
+        f"VIP: {st['vip']} · без ПДн: {st['no_policy']} · рассылка: {st['marketing']}\n"
+        f"Inbox (90д): {inbox_total}\n"
+        f"Топ разделов 7д: {top_lines}"
+    )
+
+
+async def _send_weekly_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    st = _user_stats()
+    inbox_total, _ = await inbox_mod.stats()
+    await analytics.rollup_weekly()
+    text = _format_report_text(title="📊 Отчёт за неделю", st=st, inbox_total=inbox_total)
+    await admin_alerts.notify_seed_admins(context.bot, SEED_ADMIN_IDS, text)
+
+
+async def _send_monthly_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    st = _user_stats()
+    inbox_total, _ = await inbox_mod.stats()
+    now_msk = datetime.now(user_registry.MSK)
+    prev = (now_msk.replace(day=1) - timedelta(days=1))
+    await analytics.rollup_monthly(prev.year, prev.month)
+    text = _format_report_text(
+        title=f"📅 Итог месяца {prev.strftime('%m.%Y')}",
+        st=st,
+        inbox_total=inbox_total,
+    )
+    await admin_alerts.notify_seed_admins(context.bot, SEED_ADMIN_IDS, text)
+
+
+def _schedule_reports(application: Application) -> None:
+    if not application.job_queue:
+        print("JobQueue недоступен — отчёты не запланированы (установите python-telegram-bot[job-queue])")
+        return
+    report_time = dt_time(hour=12, minute=0, tzinfo=user_registry.MSK)
+    application.job_queue.run_daily(
+        _send_weekly_report,
+        time=report_time,
+        days=(6,),
+        name="weekly_report",
+    )
+
+    async def monthly_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        now_msk = datetime.now(user_registry.MSK)
+        if now_msk.day == 1:
+            await _send_monthly_report(ctx)
+
+    application.job_queue.run_daily(
+        monthly_job,
+        time=report_time,
+        name="monthly_report",
+    )
+    print("Отчёты: воскресенье и 1-е число, 12:00 MSK")
+
+
+async def _continue_pending_action(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    pending: str,
+) -> None:
+    """Продолжить действие, которое вызвало gate политики."""
+    if pending == "today":
+        await show_today(update, context)
+    elif pending == "start":
+        await start(update, context)
+    elif pending == "vip":
+        await show_vip(update, context)
+    elif pending == "store":
+        await show_store(update, context)
+    elif pending == "more":
+        await show_more(update, context)
+    elif pending == "weather":
+        await weather(update, context)
+    elif pending == "moon":
+        await moon_cmd(update, context)
+    elif pending == "angel":
+        key = context.user_data.pop("pending_angel_key", None)
+        if key:
+            await reply_angelic_sign(update, context, key)
+    elif pending == "unknown":
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                ui.UNKNOWN_COMMAND_HINT, parse_mode="HTML", reply_markup=ui.get_main_keyboard()
+            )
+
+
+async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query and query.data == ui.CB_MARKETING_UNSUB:
+        await query.answer()
+        user = query.from_user
+        if user:
+            async with _users_lock:
+                users = _load_users()
+                user_registry.set_marketing_opt_in(users, user.id, False)
+                _save_users(users)
+            if query.message:
+                await query.message.reply_text(ui.MSG_MARKETING_OFF, parse_mode="HTML")
+        return
+    pending = await consent_handlers.consent_callback(
+        update,
+        context,
+        users_lock=_users_lock,
+        load_users=_load_users,
+        save_users=_save_users,
+    )
+    if pending:
+        await _continue_pending_action(update, context, pending)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка текстовых сообщений."""
+    """Обработка текстовых сообщений и кнопок главного меню."""
     await ensure_user_saved(update)
-    
+
     user = update.effective_user
-    if not user:
-        return
-    
-    text = update.message.text.strip()
-    user_id = user.id
-    
-    # Проверка кода администратора
-    if context.user_data.get("waiting_admin_code"):
-        if text == ADMIN_CODE:
-            await add_admin(user_id)
-            context.user_data["waiting_admin_code"] = False
-            await update.message.reply_text(
-                ui.ADMIN_CODE_OK,
-                reply_markup=ui.get_admin_keyboard(),
-            )
-        else:
-            await update.message.reply_text(
-                ui.ADMIN_CODE_WRONG,
-            )
+    if not user or not update.message:
         return
 
-    # Ожидание email для создания студента Zenclass
-    if context.user_data.get("awaiting_zenclass_email"):
-        context.user_data["awaiting_zenclass_email"] = False
-        if is_valid_email(text):
-            ok = await zenclass_create_student_with_email(update, context, text)
-            if ok:
-                await update.message.reply_text(
-                    ui.MSG_ZC_STUDENT_CREATED_OK
-                )
-            else:
-                await update.message.reply_text(
-                    ui.MSG_ZC_STUDENT_CREATED_FAIL
-                )
-        else:
-            await update.message.reply_text(
-                ui.MSG_ZC_EMAIL_INVALID
-            )
+    text = (update.message.text or "").strip()
+    if _is_seed_admin(user.id):
+        await add_admin(user.id)
+
+    if text == ui.BTN_TODAY:
+        await show_today(update, context)
+        return
+    if text == ui.BTN_VIP:
+        await show_vip(update, context)
+        return
+    if text == ui.BTN_STORE:
+        await show_store(update, context)
+        return
+    if text == ui.BTN_MORE:
+        await show_more(update, context)
+        return
+    if text.casefold() in (
+        "новое место",
+        ui.BTN_WEATHER_NEW_LOC.casefold(),
+        ui.BTN_WEATHER_NEW_LOC_LEGACY.casefold(),
+    ):
+        await weather_ask_new_location(update, context)
+        return
+    if text in (
+        ui.BTN_WEATHER_SHARE_LOC,
+        ui.BTN_WEATHER_SHARE_LOC_LEGACY,
+        "Отправить мою геопозицию",
+    ):
+        await _weather_ask_location(update.effective_message)
         return
 
-    # Обработка команд администратора
-    if is_admin(user_id):
-        if text == ui.BTN_ADMIN_USERS:
-            users = _load_users()
-            count = len(users)
-            await update.message.reply_text(ui.MSG_ADMIN_USER_COUNT.format(count=count))
-        elif text == ui.BTN_ADMIN_GROUPS:
-            groups_count = len(_known_chats)
-            if groups_count == 0:
-                await update.message.reply_text(ui.MSG_ADMIN_NO_GROUPS)
-            else:
-                groups_list = ", ".join(str(chat_id) for chat_id in _known_chats)
-                await update.message.reply_text(
-                    ui.MSG_ADMIN_GROUPS_LIST.format(count=groups_count, ids=groups_list)
-                )
-        elif text == ui.BTN_ADMIN_EVENTS:
-            stats = events_storage.get_events_stats()
-            type_labels = {
-                "subscribe": ui.EVENT_LABEL_SUBSCRIBE,
-                "unsubscribe": ui.EVENT_LABEL_UNSUBSCRIBE,
-                "reaction": ui.EVENT_LABEL_REACTION,
-            }
-            parts = [
-                ui.EVENTS_TITLE_HTML,
-                "",
-                f"Всего: {stats['total']}",
-                f"  {type_labels['subscribe']}: {stats['subscribe']}",
-                f"  {type_labels['unsubscribe']}: {stats['unsubscribe']}",
-                f"  {type_labels['reaction']}: {stats['reaction']}",
-            ]
-            if stats["last_events"]:
-                parts.append("")
-                parts.append(ui.EVENTS_RECENT_HEADER)
-                for e in stats["last_events"][:5]:
-                    ts = e.get("timestamp", "")[:10]
-                    etype = e.get("type", "?")
-                    chat_title = (e.get("chat") or {}).get("title", "—")
-                    user = e.get("user") or {}
-                    uname = f"@{user['username']}" if user.get("username") else (user.get("first_name") or "—")
-                    parts.append(f"  • {ts} | {etype} | {chat_title} | {uname}")
-            await update.message.reply_text("\n".join(parts), parse_mode="HTML")
-        elif text == ui.BTN_ADMIN_ZENCLASS:
-            # Показываем меню Zenclass
-            keyboard = ui.get_zenclass_menu_keyboard()
-            await update.message.reply_text(
-                ui.ZENCLASS_MENU_HEADER,
-                reply_markup=keyboard,
+    if _is_seed_admin(user.id):
+        if text.casefold() == ui.GOD_TEXT_TRIGGER:
+            await _open_god_panel(update)
+            return
+        admin_angel = _is_admin_unknown_angels_cmd(text)
+        if admin_angel:
+            await admin_inbox(update, admin_angel)
+            return
+        if await _admin_apply_user_cmd(update, context, text):
+            return
+        admin_mode = context.user_data.get("admin_mode")
+        if admin_mode == "vip_add":
+            await vip_handlers.admin_vip_add_codes(update, context, text)
+            return
+        if admin_mode == "vip_import":
+            await vip_handlers.admin_vip_import_users(
+                update,
+                context,
+                text,
+                users_lock=_users_lock,
+                load_users=_load_users,
+                save_users=_save_users,
             )
-        elif text == ui.BTN_ZC_TEST:
-            await zenclass_test(update, context)
-        elif text == ui.BTN_ZC_STUDENTS:
-            await zenclass_students(update, context)
-        elif text == ui.BTN_ZC_COURSES:
-            await zenclass_courses(update, context)
-        elif text == ui.BTN_ZC_CREATE:
-            await zenclass_create_student_handler(update, context)
-        elif text == ui.BTN_ZC_BACK:
-            # Возвращаемся в главное меню админа
-            await update.message.reply_text(
-                ui.ADMIN_BACK_MAIN,
-                reply_markup=ui.get_admin_keyboard(),
-            )
-        else:
-            # Если это не команда админа, проверяем другие команды
-            if text == ui.BTN_WEATHER_REFRESH:
-                await weather_here(update, context)
-            else:
-                await update.message.reply_text(
-                    ui.UNKNOWN_COMMAND_HINT,
-                    reply_markup=ReplyKeyboardRemove(),
-                )
-    else:
-        # Для обычных пользователей
-        if text == ui.BTN_WEATHER_REFRESH:
-            await weather_here(update, context)
-        else:
-            await update.message.reply_text(
-                ui.UNKNOWN_COMMAND_HINT,
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            return
+
+    if not _is_seed_admin(user.id):
+        async with _users_lock:
+            if user_registry.is_admin_blocked(_load_users(), user.id):
+                await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
+                return
+
+    if await vip_handlers.try_vip_code(
+        update,
+        context,
+        text,
+        is_vip=_user_is_vip,
+        grant_vip=_grant_vip_user,
+        show_vip_home=show_vip_home,
+        notify_wrong=lambda ctx, **kw: vip_handlers.notify_admin_wrong_code(
+            ctx,
+            notify_path=VIP_NOTIFY_FILE,
+            notify_lock=_vip_notify_lock,
+            seed_admin_ids=SEED_ADMIN_IDS,
+            load_admins=_load_admins,
+            **kw,
+        ),
+        notify_duplicate=lambda ctx, **kw: _notify_duplicate_vip(ctx, **kw),
+        protect_kwargs=PROTECT_KWARGS,
+    ):
+        return
+
+    if ewasml_services.is_angelic_input(text):
+        await reply_angelic_sign(update, context, text)
+        return
+
+    if not await _require_access(update, context, "unknown"):
+        return
+
+    entry = await inbox_mod.add_entry(
+        entry_type="unknown_command",
+        user_id=user.id,
+        username=user.username,
+        text=text,
+    )
+    if not entry.get("admin_notified_at"):
+        sent = await admin_alerts.notify_inbox_entry(
+            context.bot,
+            SEED_ADMIN_IDS,
+            user_id=user.id,
+            username=user.username,
+            entry_type="unknown_command",
+            text=text,
+        )
+        if sent:
+            await inbox_mod.mark_notified(entry["id"])
+
+    await update.message.reply_text(
+        ui.UNKNOWN_COMMAND_HINT,
+        parse_mode="HTML",
+        reply_markup=ui.get_main_keyboard(),
+    )
+
+
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Сообщить пользователю и админу о любой необработанной ошибке."""
+    print(f"Handler error: {context.error!r}")
+    if update:
+        print(f"  update={update!r}")
+    message = getattr(update, "effective_message", None)
+    if message:
+        try:
+            await message.reply_text(ui.MSG_TECHNICAL_ERROR, reply_markup=ui.get_main_keyboard())
+        except Exception as exc:
+            print(f"Error reply failed: {exc!r}")
+
+    error_kind = "JSON-ошибка" if isinstance(context.error, JsonStorageError) else "Неожиданная ошибка"
+    details = html.escape(str(context.error)[:3000])
+    alert = f"⚠️ {error_kind} MaraniusBOT:\n<code>{details}</code>"
+    for admin_id in SEED_ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin_id, alert, parse_mode="HTML")
+        except Exception as exc:
+            print(f"Error notify {admin_id}: {exc!r}")
+
+
+async def _notify_storage_recoveries(context) -> None:
+    for event in pop_recovery_events():
+        text = (
+            "✅ MaraniusBOT автоматически восстановил JSON.\n"
+            f"Файл: <code>{event['file']}</code>\n"
+            f"Копия: <code>{event['backup']}</code>\n"
+            "Повреждённый оригинал сохранён для разбора."
+        )
+        for admin_id in SEED_ADMIN_IDS:
+            try:
+                await context.bot.send_message(admin_id, text, parse_mode="HTML")
+            except Exception as exc:
+                print(f"Storage recovery notify {admin_id}: {exc!r}")
+
+
+async def _maranius_post_init(application: Application) -> None:
+    """Сброс webhook (иначе polling конфликтует) и явный лог, какой бот подключён."""
+    ensure_seed_admins()
+    ensure_seed_vip()
+    migrated = await inbox_mod.migrate_legacy_unknown_csv()
+    if migrated:
+        print(f"Inbox: мигрировано из unknown_angelic.csv — {migrated} записей")
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    cmd_count = await sync_bot_commands(application.bot)
+    me = await application.bot.get_me()
+    un = f"@{me.username}" if me.username else "(без username)"
+    print(f"Подключён к Telegram: {un}, id={me.id}")
+    print(f"Меню команд «☰»: {cmd_count} шт. (default + ru)")
+    print(f"Seed-админы: {sorted(SEED_ADMIN_IDS)}")
+    print(f"Seed-VIP: {sorted(SEED_ADMIN_IDS)}")
+    _schedule_reports(application)
+    await _notify_storage_recoveries(application)
+    if application.job_queue:
+        application.job_queue.run_repeating(_notify_storage_recoveries, interval=60, first=60, name="storage_recovery_alerts")
 
 
 def main() -> None:
     """Запуск бота."""
+    global BOT_TOKEN, BOT_PROFILE_ACTIVE
+
+    load_dotenv(_BOT_DIR / ".env", override=True)
+    BOT_TOKEN, BOT_PROFILE_ACTIVE = resolve_bot_token()
+
     if not BOT_TOKEN:
-        print("Ошибка: BOT_TOKEN не установлен в переменных окружения!")
+        if BOT_PROFILE_ACTIVE == "test":
+            print(
+                "Ошибка: BOT_PROFILE=test, но не задан BOT_TOKEN_TEST в .env "
+                "(сохрани файл .env и проверь строку BOT_TOKEN_TEST=...)."
+            )
+        else:
+            print(
+                "Ошибка: не задан токен. Укажи BOT_TOKEN_PROD или BOT_TOKEN в .env."
+            )
         return
 
+    print(f"Профиль бота: {BOT_PROFILE_ACTIVE} (из .env в папке проекта)")
+    print(f"Числовой id из токена: {_token_numeric_id(BOT_TOKEN)} (тест и прод должны различаться)")
+    if BOT_PROFILE_ACTIVE == "test":
+        print(
+            "Если появится Conflict: останови все другие окна с bot.py — "
+            "с одним токеном может работать только один процесс."
+        )
+
+    ensure_seed_admins()
+    ensure_seed_vip()
     events_storage.init_storage(BASE_DIR)
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    builder = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(120.0)
+        .write_timeout(600.0)
+        .media_write_timeout(600.0)
+        .post_init(_maranius_post_init)
+    )
+    if TELEGRAM_PROXY_URL:
+        print(f"Telegram proxy: {TELEGRAM_PROXY_URL}")
+        builder = builder.proxy(TELEGRAM_PROXY_URL).get_updates_proxy(TELEGRAM_PROXY_URL)
+    application = builder.build()
 
-    # Регистрация обработчиков команд
+    application.add_error_handler(_on_error)
+
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("me", me_cmd))
-    application.add_handler(CommandHandler("weather", weather))
-    application.add_handler(CommandHandler("rate", rate))
+    application.add_handler(CommandHandler("today", today_cmd))
+    application.add_handler(CommandHandler("vip", vip_cmd))
+    application.add_handler(CommandHandler("store", store_cmd))
+    application.add_handler(CommandHandler("contact", contact_cmd))
+    application.add_handler(CommandHandler("learning", learning_cmd))
+    application.add_handler(CommandHandler("info", info_cmd))
     application.add_handler(CommandHandler("moon", moon_cmd))
-    application.add_handler(CommandHandler("admin", admin_cmd))
+    application.add_handler(CommandHandler("policy", policy_cmd))
+    application.add_handler(CommandHandler("god", god_cmd))
 
-    # Обработчик геолокации
     application.add_handler(MessageHandler(filters.LOCATION, weather_by_location))
-
-    # Обработчик callback для курсов валют
-    application.add_handler(CallbackQueryHandler(rate_button, pattern=r"^rate:"))
-
-    # Обработчик текстовых сообщений
+    application.add_handler(
+        CallbackQueryHandler(consent_callback, pattern=r"^consent:")
+    )
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^admin:"))
+    application.add_handler(
+        CallbackQueryHandler(vip_approve_callback, pattern=r"^vip:(approve|reject):")
+    )
+    application.add_handler(
+        CallbackQueryHandler(vip_callback, pattern=r"^vip:(welcome|decks|deck:|sec:|pdf:)")
+    )
+    application.add_handler(CallbackQueryHandler(today_callback, pattern=r"^today:"))
+    application.add_handler(CallbackQueryHandler(more_callback, pattern=r"^more:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # События в группах/каналах: подписка, отписка, реакции
+    from telegram.ext import ChatMemberHandler
+
+    application.add_handler(
+        ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
+
     subscribe_h = make_subscribe_handler(_load_admins, BASE_DIR)
     unsubscribe_h = make_unsubscribe_handler(_load_admins, BASE_DIR)
     reaction_h = make_reaction_handler(_load_admins, BASE_DIR)
@@ -1168,11 +2168,12 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, unsubscribe_h))
     application.add_handler(MessageReactionHandler(reaction_h))
 
-    # Запуск бота
-    print("Бот запущен...")
-    application.run_polling(allowed_updates=["message", "callback_query", "message_reaction"])
+    print("Бот запущен (long polling)...")
+    application.run_polling(
+        allowed_updates=["message", "callback_query", "message_reaction", "my_chat_member"],
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
     main()
-

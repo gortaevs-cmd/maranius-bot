@@ -1,8 +1,6 @@
-python-telegram-bot==21.4
+python-telegram-bot[job-queue,socks]==21.4
 python-dotenv==1.0.1
 httpx==0.28.1
 timezonefinder==6.2.0
 pytz==2024.1
 pyephem
-fastapi==0.115.0
-uvicorn[standard]==0.32.0

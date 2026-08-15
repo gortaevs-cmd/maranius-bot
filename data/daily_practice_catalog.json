@@ -1,0 +1,30 @@
+{
+  "cards": [
+    {"slug": "svet-dushi", "title": "Свет души"},
+    {"slug": "put-geroya", "title": "Путь героя"},
+    {"slug": "zerkalo", "title": "Зеркало"},
+    {"slug": "istochnik", "title": "Источник"},
+    {"slug": "potok", "title": "Поток"},
+    {"slug": "klyuch", "title": "Ключ"},
+    {"slug": "most", "title": "Мост"},
+    {"slug": "semya", "title": "Семя"},
+    {"slug": "krylya", "title": "Крылья"},
+    {"slug": "serdce", "title": "Сердце"},
+    {"slug": "zvezda", "title": "Звезда"},
+    {"slug": "dver", "title": "Дверь"}
+  ],
+  "crystals": [
+    {"slug": "eliksir", "title": "ЭЛЕКСИР"},
+    {"slug": "serus", "title": "СЕРУС"},
+    {"slug": "rana-so-ham", "title": "РАНА СО ХАМ"},
+    {"slug": "sol-a-vana", "title": "СОЛЬ А ВАНА"},
+    {"slug": "sai-da-sva", "title": "САИ ДА СВА"},
+    {"slug": "esha-ta", "title": "ЭША ТА"},
+    {"slug": "danas", "title": "ДАНАС"},
+    {"slug": "el-ahaj", "title": "ЭЛЬ АХАЙ"},
+    {"slug": "svetovoj-put", "title": "Световой путь"},
+    {"slug": "atlantida", "title": "Атлантида"},
+    {"slug": "krayon", "title": "Крайон"},
+    {"slug": "kristall-dnya", "title": "Кристалл дня"}
+  ]
+}
