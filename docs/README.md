@@ -44,3 +44,4 @@
 
 - [README.md](../README.md) — установка, запуск, `.env`
 - [`.env.example`](../.env.example) — шаблон переменных окружения
+- [`.github/workflows/tests.yml`](../.github/workflows/tests.yml) — автоматические тесты GitHub Actions

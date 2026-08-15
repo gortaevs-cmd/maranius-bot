@@ -61,3 +61,13 @@ python3 bot.py
 (После `source .venv/bin/activate` подойдёт и `python bot.py`, если он указывает на venv.)
 
 После запуска найди своего бота в Telegram и напиши ему `/start` или любое сообщение.
+
+## Проверки
+
+Локальный запус:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+GitHub Actions автоматически запускает тесты и проверку синтаксиса при каждом `push` и pull request в `main`. Workflow также можно запустить вручную на вкладке Actions.
