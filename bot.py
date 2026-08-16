@@ -896,11 +896,7 @@ async def show_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not await _require_access(update, context, "store"):
         return
     _clear_vip_awaiting(context)
-    text = (
-        f"{ui.MSG_STORE_STUB}\n\n"
-        f'<a href="{ui.URL_CATALOG}">Открыть каталог</a>'
-    )
-    await _reply_screen(update, text)
+    await _reply_screen(update, ui.MSG_STORE_STUB)
 
 
 async def show_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
