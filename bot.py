@@ -1721,7 +1721,12 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
     if data == ui.CB_INFO:
-        await _edit_or_reply(msg, ui.MSG_INFO_FAQ, ui.get_back_to_more_keyboard())
+        await _edit_or_reply(
+            msg,
+            ui.MSG_INFO_FAQ,
+            ui.get_back_to_more_keyboard(),
+            disable_web_page_preview=True,
+        )
         return
     if data == ui.CB_POLICY:
         user = query.from_user
