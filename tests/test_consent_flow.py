@@ -77,7 +77,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
 
         start_handler.assert_awaited_once_with(update, context)
 
-    async def test_policy_acceptance_keeps_only_minimal_record_before_profile_save(self):
+    async def test_policy_acceptance_waits_for_marketing_choice_before_start(self):
         users = {}
         saved = {}
         query = SimpleNamespace(
@@ -101,11 +101,35 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
             save_users=save_users,
         )
 
-        self.assertEqual(pending, "start")
+        self.assertIsNone(pending)
+        self.assertEqual(context.user_data["pending_action"], "start")
         self.assertEqual(saved["42"]["id"], 42)
         self.assertIn("policy_accepted_at", saved["42"])
         self.assertNotIn("username", saved["42"])
         self.assertNotIn("first_name", saved["42"])
+
+    async def test_marketing_choice_continues_pending_start(self):
+        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z"}}
+        query = SimpleNamespace(
+            data=ui.CB_MARKETING_YES,
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+            message=SimpleNamespace(reply_text=AsyncMock()),
+        )
+        context = SimpleNamespace(user_data={"pending_action": "start"})
+
+        pending = await consent_handlers.consent_callback(
+            update=SimpleNamespace(callback_query=query),
+            context=context,
+            users_lock=AsyncLock(),
+            load_users=lambda: users,
+            save_users=lambda _value: None,
+        )
+
+        self.assertEqual(pending, "start")
+        self.assertNotIn("pending_action", context.user_data)
+        self.assertTrue(users["42"]["marketing_opt_in"])
+        query.message.reply_text.assert_not_awaited()
 
     async def test_marketing_refusal_does_not_remove_policy_access(self):
         users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z"}}

@@ -132,7 +132,9 @@ async def consent_callback(
                 parse_mode="HTML",
                 reply_markup=ui.get_marketing_offer_keyboard(),
             )
-            return context.user_data.pop("pending_action", None)
+            # Продолжаем start/другое действие только после
+            # ответа на вопрос о рассылке, чтобы не слать два экрана сразу.
+            return None
         await query.message.reply_text(
             ui.MSG_POLICY_ACCEPTED,
             parse_mode="HTML",
@@ -146,9 +148,12 @@ async def consent_callback(
             users = load_users()
             user_registry.set_marketing_opt_in(users, user.id, opt_in)
             save_users(users)
+        pending = context.user_data.pop("pending_action", None)
+        if pending:
+            return pending
         text = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
         await query.message.reply_text(text, parse_mode="HTML", reply_markup=ui.get_main_keyboard())
-        return context.user_data.pop("pending_action", None)
+        return None
 
     if data == ui.CB_MARKETING_TOGGLE_ON:
         async with users_lock:
