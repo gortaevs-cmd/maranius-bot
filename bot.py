@@ -898,7 +898,12 @@ async def show_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not await _require_access(update, context, "store"):
         return
     _clear_vip_awaiting(context)
-    await _reply_screen(update, ui.MSG_STORE_STUB)
+    await _reply_screen(
+        update,
+        ui.MSG_STORE_STUB,
+        inline_markup=ui.get_store_inline_keyboard(),
+        disable_web_page_preview=True,
+    )
 
 
 async def show_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

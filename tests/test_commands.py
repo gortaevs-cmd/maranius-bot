@@ -8,7 +8,16 @@ class BotCommandsTests(unittest.TestCase):
     def test_contact_replaces_services_in_telegram_menu(self):
         commands = {item.command: item.description for item in ui.get_bot_commands()}
         self.assertEqual(commands["contact"], "Связь с автором")
+        self.assertEqual(commands["learning"], "Курсы/Практики")
         self.assertNotIn("services", commands)
+
+    def test_store_button_uses_telegram_utm_tags(self):
+        button = ui.get_store_inline_keyboard().inline_keyboard[0][0]
+        self.assertEqual(button.text, "🛍 Перейти в Лавку")
+        self.assertEqual(
+            button.url,
+            "https://maranius.ru/?utm_source=telegram&utm_medium=bot&utm_campaign=lavka",
+        )
 
     def test_every_inline_button_uses_a_registered_callback_family(self):
         keyboards = [

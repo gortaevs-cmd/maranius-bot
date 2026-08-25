@@ -22,7 +22,7 @@ BTN_STORE = "🛍 Лавка"
 BTN_MORE = "⋯ Ещё"
 
 # Внешние ссылки (синее «☰» и разделы)
-URL_CATALOG = "https://maranius.ru/"
+URL_CATALOG = "https://maranius.ru/?utm_source=telegram&utm_medium=bot&utm_campaign=lavka"
 URL_SCHOOL = "https://school.maranius.ru/"
 URL_ANGELS_INSTRUCTION = "https://telegra.ph/Angelskie-znaki-08-03"
 URL_ANGEL_COURSE = (
@@ -181,13 +181,15 @@ MSG_STORE_STUB = (
     "Перейдите в Лавку, чтобы посмотреть каталог, описания и выбрать подходящий товар 👇"
 )
 
+BTN_STORE_OPEN = "🛍 Перейти в Лавку"
+
 MSG_MORE = (
     f"<b>{BTN_MORE}</b>\n\n"
     "Здесь собраны полезные сервисы, материалы и информация:\n\n"
     "🌤 <b>Погода</b> — текущая погода и прогноз для вашей локации.\n"
     "🌙 <b>Луна</b> — фаза, лунные сутки и даты новолуния и полнолуния.\n"
     "🙌 <b>Услуги</b> — целительские практики, их описания и запись на сессию.\n"
-    "🎓 <b>Курсы</b> — онлайн-программы и практики с кристаллами Крайона.\n"
+    "🎓 <b>Курсы/Практики</b> — онлайн-программы и практики с кристаллами Крайона.\n"
     "ℹ️ <b>Инфо / FAQ</b> — как пользоваться ботом и ответы на частые вопросы.\n"
     "🛡 <b>Политика</b> — документы об обработке персональных данных.\n\n"
     "Выберите нужный раздел ниже 👇"
@@ -641,6 +643,13 @@ def get_contact_inline_keyboard(*, with_back: bool = False) -> InlineKeyboardMar
     return InlineKeyboardMarkup(rows)
 
 
+def get_store_inline_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка перехода в каталог с UTM-метками для Яндекс Метрики."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BTN_STORE_OPEN, url=URL_CATALOG)]]
+    )
+
+
 def get_services_inline_keyboard(*, with_back: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -683,7 +692,7 @@ def get_bot_commands() -> list[BotCommand]:
     return [
         BotCommand("start", "Главное меню"),
         BotCommand("store", "Каталог Maranius"),
-        BotCommand("learning", "Онлайн-курсы"),
+        BotCommand("learning", "Курсы/Практики"),
         BotCommand("contact", "Связь с автором"),
         BotCommand("policy", "Политика конфиденциальности"),
     ]
@@ -739,7 +748,7 @@ def get_more_inline_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("Услуги", callback_data=CB_SERVICES),
-                InlineKeyboardButton("Курсы", callback_data=CB_LEARNING),
+                InlineKeyboardButton("Курсы/Практики", callback_data=CB_LEARNING),
             ],
             [
                 InlineKeyboardButton("Инфо / FAQ", callback_data=CB_INFO),
