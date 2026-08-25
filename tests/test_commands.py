@@ -11,13 +11,14 @@ class BotCommandsTests(unittest.TestCase):
         self.assertEqual(commands["learning"], "Курсы/Практики")
         self.assertNotIn("services", commands)
 
-    def test_store_button_uses_telegram_utm_tags(self):
+    def test_store_web_app_button_uses_telegram_utm_tags(self):
         button = ui.get_store_inline_keyboard().inline_keyboard[0][0]
         self.assertEqual(button.text, "🛍 Перейти в Лавку")
         self.assertEqual(
-            button.url,
+            button.web_app.url,
             "https://maranius.ru/?utm_source=telegram&utm_medium=bot&utm_campaign=lavka",
         )
+        self.assertIn(ui.URL_CATALOG, ui.MSG_STORE_STUB)
 
     def test_every_inline_button_uses_a_registered_callback_family(self):
         keyboards = [

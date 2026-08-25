@@ -13,6 +13,7 @@ from telegram import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 
 # --- Главное меню (reply, всегда внизу) ---
@@ -178,7 +179,8 @@ MSG_STORE_STUB = (
     "✨ <b>Авторские и программные свечи</b> — для духовных практик, работы с намерениями "
     "и энергиями.\n"
     "🎁 <b>Подарки</b> — осмысленные подарки для себя и близких.\n\n"
-    "Перейдите в Лавку, чтобы посмотреть каталог, описания и выбрать подходящий товар 👇"
+    "Перейдите в Лавку, чтобы посмотреть каталог, описания и выбрать подходящий товар 👇\n\n"
+    f'<a href="{URL_CATALOG}">Открыть Лавку в браузере</a>'
 )
 
 BTN_STORE_OPEN = "🛍 Перейти в Лавку"
@@ -644,9 +646,9 @@ def get_contact_inline_keyboard(*, with_back: bool = False) -> InlineKeyboardMar
 
 
 def get_store_inline_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка перехода в каталог с UTM-метками для Яндекс Метрики."""
+    """Открывает каталог во встроенном окне Telegram с UTM-метками."""
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(BTN_STORE_OPEN, url=URL_CATALOG)]]
+        [[InlineKeyboardButton(BTN_STORE_OPEN, web_app=WebAppInfo(url=URL_CATALOG))]]
     )
 
 
