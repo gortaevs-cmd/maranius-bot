@@ -55,6 +55,40 @@ class DailyPracticeStateTests(unittest.TestCase):
             "url": "https://maranius.ru/practice/podskazki/42",
         })
 
+    def test_crystal_pull_opens_its_anchor_on_the_published_page(self):
+        with patch.object(
+            daily_practice.secrets,
+            "choice",
+            return_value={"slug": "elixir", "title": "ЭЛЕКСИР"},
+        ):
+            pull = daily_practice.pick_random_crystal()
+
+        self.assertEqual(pull, {
+            "slug": "elixir",
+            "title": "ЭЛЕКСИР",
+            "url": "https://maranius.ru/themes/kristally#elixir",
+        })
+
+    def test_existing_crystal_pull_migrates_the_legacy_link(self):
+        state = daily_practice.normalize_practice(
+            {
+                "date_local": "2026-08-26",
+                "card": None,
+                "crystal": {
+                    "slug": "danas",
+                    "title": "ДАНАС",
+                    "url": "https://maranius.ru/practice/podskazki?crystal=danas#kristall",
+                },
+                "dice": None,
+            },
+            today_local="2026-08-26",
+        )
+
+        self.assertEqual(
+            state["crystal"]["url"],
+            "https://maranius.ru/themes/kristally#danas",
+        )
+
 
 class DailyPracticeConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_parallel_card_clicks_persist_only_one_result(self):

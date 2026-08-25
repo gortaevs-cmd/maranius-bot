@@ -8,6 +8,7 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 _BASE = Path(__file__).resolve().parent.parent
@@ -16,6 +17,8 @@ MSK = ZoneInfo("Europe/Moscow")
 
 # Страницы карт публикуются статическим сайтом по /practice/podskazki/<id>.
 DEFAULT_CARD_BASE_URL = "https://maranius.ru/practice/podskazki"
+# Карточки кристаллов опубликованы на одной странице; slug каждой карточки — её якорь.
+DEFAULT_CRYSTAL_BASE_URL = "https://maranius.ru/themes/kristally"
 
 
 class PullRecord(TypedDict):
@@ -58,6 +61,14 @@ def card_base_url() -> str:
     return (os.getenv("CARD_OF_DAY_BASE_URL") or DEFAULT_CARD_BASE_URL).rstrip("/")
 
 
+def crystal_base_url() -> str:
+    return (os.getenv("CRYSTAL_OF_DAY_BASE_URL") or DEFAULT_CRYSTAL_BASE_URL).rstrip("/")
+
+
+def crystal_url(slug: str) -> str:
+    return f"{crystal_base_url()}#{quote(slug, safe='')}"
+
+
 def _load_catalog_raw() -> Dict[str, List[Dict[str, str]]]:
     if not CATALOG_FILE.is_file():
         return {"cards": [], "crystals": []}
@@ -82,11 +93,10 @@ def _pick_item(pool: List[Dict[str, str]], *, kind: str) -> Optional[PullRecord]
     item = secrets.choice(items)
     slug = item["slug"].strip()
     title = (item.get("title") or slug).strip()
-    base = card_base_url()
     if kind == "card":
-        url = f"{base}/{slug}"
+        url = f"{card_base_url()}/{quote(slug, safe='')}"
     else:
-        url = f"{base}?crystal={slug}#kristall"
+        url = crystal_url(slug)
     return PullRecord(slug=slug, title=title, url=url)
 
 
@@ -115,10 +125,14 @@ def normalize_practice(raw: Any, *, today_local: Optional[str] = None, timezone_
             and isinstance(entry.get("slug"), str)
             and isinstance(entry.get("url"), str)
         ):
+            slug = entry["slug"]
+            url = entry["url"]
+            if key == "crystal" and "?crystal=" in url and url.endswith("#kristall"):
+                url = crystal_url(slug)
             state[key] = PullRecord(  # type: ignore[literal-required]
-                slug=entry["slug"],
-                title=str(entry.get("title") or entry["slug"]),
-                url=entry["url"],
+                slug=slug,
+                title=str(entry.get("title") or slug),
+                url=url,
             )
     dice_entry = raw.get("dice")
     if isinstance(dice_entry, dict):
