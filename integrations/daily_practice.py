@@ -66,7 +66,7 @@ def crystal_base_url() -> str:
 
 
 def crystal_url(slug: str) -> str:
-    return f"{crystal_base_url()}#{quote(slug, safe='')}"
+    return f"{crystal_base_url()}/#{quote(slug, safe='')}"
 
 
 def _load_catalog_raw() -> Dict[str, List[Dict[str, str]]]:

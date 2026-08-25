@@ -66,7 +66,7 @@ class DailyPracticeStateTests(unittest.TestCase):
         self.assertEqual(pull, {
             "slug": "elixir",
             "title": "ЭЛЕКСИР",
-            "url": "https://maranius.ru/themes/kristally#elixir",
+            "url": "https://maranius.ru/themes/kristally/#elixir",
         })
 
     def test_existing_crystal_pull_migrates_the_legacy_link(self):
@@ -86,7 +86,7 @@ class DailyPracticeStateTests(unittest.TestCase):
 
         self.assertEqual(
             state["crystal"]["url"],
-            "https://maranius.ru/themes/kristally#danas",
+            "https://maranius.ru/themes/kristally/#danas",
         )
 
 
