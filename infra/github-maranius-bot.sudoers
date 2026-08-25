@@ -1,1 +1,2 @@
+Defaults:github-maranius-bot env_keep += "SSH_ORIGINAL_COMMAND"
 github-maranius-bot ALL=(root) NOPASSWD: /opt/infra/scripts/deploy-maranius-bot.sh
