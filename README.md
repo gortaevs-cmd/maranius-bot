@@ -12,8 +12,12 @@ Telegram-бот для ежедневных практик, ангельских
 
 ## Статус деплоя
 
-**Боевой (Hip prod):** `@MaraniusBOT` — `BOT_PROFILE=prod`, токен в `BOT_TOKEN_PROD`.
-Сервер: `deploy@194.190.153.173`, путь `/opt/apps/maranius`, systemd `maranius-bot`. Деплой: `./scripts/deploy_hip_prod.sh`.
+**Боевой (TimeWeb):** `@MaraniusBOT` — `BOT_PROFILE=prod`, токен в `BOT_TOKEN_PROD`.
+Сервер: `deploy@94.241.142.242`, путь `/opt/apps/maranius`, контейнер `maranius`.
+Обновление: только цепочкой GitHub Actions «Tests → Publish verified container → Deploy verified container».
+Ручной production-деплой отключён; журнал доступен администратору сервера через `docker compose logs -f maranius`.
+Общий канон инфраструктуры: [CURRENT_STATE.md](../../../99_Системное/Серверы/CURRENT_STATE.md) · статус ботов: [мои_боты_статус.md](../мои_боты_статус.md).
+Пользовательские JSON-данные сохраняются на сервере отдельно от образа; статический каталог карт и PDF входят в проверяемый образ.
 
 **Стенд (Mac):** `@angelic_signs_bot` — `BOT_PROFILE=test`, токен в `BOT_TOKEN_TEST`. Песочница `/me` `/rate`: [`../Bot_TEST_EL_bot/`](../Bot_TEST_EL_bot/).
 
@@ -59,6 +63,10 @@ python3 bot.py
 ```
 
 (После `source .venv/bin/activate` подойдёт и `python bot.py`, если он указывает на venv.)
+
+На боевом сервере используется Docker. Код и статические ресурсы поставляются образом из GitHub Container Registry,
+а пользовательские JSON-данные лежат в `/opt/apps/maranius/.runtime`. Telegram соединение
+идёт через системный SOCKS-туннель, но сам бот больше не является systemd-службой.
 
 После запуска найди своего бота в Telegram и напиши ему `/start` или любое сообщение.
 

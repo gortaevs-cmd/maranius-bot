@@ -41,7 +41,7 @@
 
 ## Автоматические проверки
 
-Workflow `.github/workflows/tests.yml` запускается:
+Цепочка GitHub Actions запускается после push в `main`: Tests → Publish verified container → Deploy verified container. Первый workflow также запускается для pull request.
 
 - при каждом `push` в `main`;
 - для pull request в `main`;
@@ -56,7 +56,8 @@ Workflow `.github/workflows/tests.yml` запускается:
 | `BOT_PROFILE` | `test` или `prod` |
 | `BOT_TOKEN_TEST` | Токен стенда |
 | `BOT_TOKEN_PROD` | Токен боевого бота |
-| `TELEGRAM_PROXY_URL` | SOCKS-туннель на Hip prod; опционально |
+| `TELEGRAM_PROXY_URL` | SOCKS-туннель на TimeWeb; в боевом Docker Compose задаётся автоматически |
+| `MARANIUS_RUNTIME_DIR` | В production `/app/.runtime`; хранит mutable JSON отдельно от образа |
 
 ## Журнал
 

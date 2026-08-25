@@ -41,6 +41,20 @@ class DailyPracticeStateTests(unittest.TestCase):
         self.assertEqual(state["crystal"]["slug"], "k")
         self.assertEqual(state["dice"]["value"], 5)
 
+    def test_card_pull_opens_a_published_site_page(self):
+        with patch.object(
+            daily_practice.secrets,
+            "choice",
+            return_value={"slug": "42", "title": "Карта № 42"},
+        ):
+            pull = daily_practice.pick_random_card()
+
+        self.assertEqual(pull, {
+            "slug": "42",
+            "title": "Карта № 42",
+            "url": "https://maranius.ru/practice/podskazki/42",
+        })
+
 
 class DailyPracticeConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_parallel_card_clicks_persist_only_one_result(self):

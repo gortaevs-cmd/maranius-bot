@@ -1,0 +1,45 @@
+name: Deploy verified container
+
+on:
+  workflow_run:
+    workflows: [Publish verified container]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  packages: read
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Get verified image
+        id: image
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          image="ghcr.io/gortaevs-cmd/maranius-bot:$SHA"
+          docker pull "$image"
+          printf 'image=%s\nsha=%s\n' "$image" "$SHA" >> "$GITHUB_OUTPUT"
+      - name: Stream image through the restricted deploy key
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.MARANIUS_BOT_DEPLOY_SSH_KEY_B64 }}
+          EXPECTED_DEPLOY_KEY_FINGERPRINT: ${{ vars.MARANIUS_BOT_DEPLOY_SSH_KEY_FINGERPRINT }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          SHA: ${{ steps.image.outputs.sha }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_maranius_bot_deploy
+          chmod 600 ~/.ssh/id_maranius_bot_deploy
+          test -n "$EXPECTED_DEPLOY_KEY_FINGERPRINT"
+          actual_fingerprint=$(ssh-keygen -y -f ~/.ssh/id_maranius_bot_deploy | ssh-keygen -lf - | awk '{print $2}')
+          test "$actual_fingerprint" = "$EXPECTED_DEPLOY_KEY_FINGERPRINT"
+          printf '%s\n' '94.241.142.242 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFIAPVUPTlhYB90lO941JD6sNchJdnXahcMpC3zOhArT' > ~/.ssh/known_hosts
+          docker image save "$IMAGE" | ssh -i ~/.ssh/id_maranius_bot_deploy -o IdentitiesOnly=yes \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            github-maranius-bot@94.241.142.242 "deploy $SHA"

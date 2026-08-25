@@ -14,7 +14,8 @@ _BASE = Path(__file__).resolve().parent.parent
 CATALOG_FILE = _BASE / "data" / "daily_practice_catalog.json"
 MSK = ZoneInfo("Europe/Moscow")
 
-DEFAULT_CARD_BASE_URL = "https://maranius.ru/karta-dnya"
+# Страницы карт публикуются статическим сайтом по /practice/podskazki/<id>.
+DEFAULT_CARD_BASE_URL = "https://maranius.ru/practice/podskazki"
 
 
 class PullRecord(TypedDict):
@@ -83,7 +84,7 @@ def _pick_item(pool: List[Dict[str, str]], *, kind: str) -> Optional[PullRecord]
     title = (item.get("title") or slug).strip()
     base = card_base_url()
     if kind == "card":
-        url = f"{base}/karta/{slug}"
+        url = f"{base}/{slug}"
     else:
         url = f"{base}?crystal={slug}#kristall"
     return PullRecord(slug=slug, title=title, url=url)

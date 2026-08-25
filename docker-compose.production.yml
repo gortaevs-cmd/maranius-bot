@@ -1,0 +1,22 @@
+services:
+  maranius:
+    image: ghcr.io/gortaevs-cmd/maranius-bot:${MARANIUS_IMAGE_TAG:?MARANIUS_IMAGE_TAG is required}
+    container_name: maranius
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      MARANIUS_RUNTIME_DIR: /app/.runtime
+      TELEGRAM_PROXY_URL: socks5h://host.docker.internal:1080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./.runtime:/app/.runtime
+      - ./data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

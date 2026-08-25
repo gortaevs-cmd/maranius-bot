@@ -93,7 +93,9 @@ def resolve_bot_token() -> Tuple[Optional[str], str]:
 BOT_TOKEN, BOT_PROFILE_ACTIVE = resolve_bot_token()
 TELEGRAM_PROXY_URL = _env_strip("TELEGRAM_PROXY_URL") or ""
 # Файлы с данными
-BASE_DIR = str(_BOT_DIR)
+# В production mutable JSON лежит на отдельном volume. Локальный запуск
+# продолжает использовать корень проекта, поэтому старые стенды совместимы.
+BASE_DIR = os.getenv("MARANIUS_RUNTIME_DIR") or str(_BOT_DIR)
 USERS_FILE = os.path.join(BASE_DIR, "users.json")
 ADMINS_FILE = os.path.join(BASE_DIR, "admins.json")
 VIP_NOTIFY_FILE = os.path.join(BASE_DIR, "data", "vip", "admin_notify.json")

@@ -16,8 +16,7 @@ Telegram-бот Maranius: ежедневные практики, ангельс�
 ## Проверка и деплой
 
 - Тесты: `.venv/bin/python -m unittest discover -s tests -v`.
-- Боевой деплой: `scripts/deploy_hip_prod.sh`; скрипт создаёт резервную копию данных и выполняет smoke-проверку.
-- Сервис: `maranius-bot`, каталог `/opt/apps/maranius`.
+- Боевой деплой: только GitHub Actions (verified image → restricted SSH) на TimeWeb; ручной `scripts/deploy_hip_prod.sh` отключён.
 
 ## Документация
 

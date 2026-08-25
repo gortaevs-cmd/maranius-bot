@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -12,7 +13,7 @@ import pytz
 from integrations.json_storage import load_json, save_json
 
 _BASE = Path(__file__).resolve().parent.parent
-USERS_FILE = _BASE / "users.json"
+USERS_FILE = Path(os.getenv("MARANIUS_RUNTIME_DIR") or _BASE) / "users.json"
 
 # Глобальный lock для чтения/записи users.json.
 # Все операции load -> modify -> save должны выполняться под этим lock.

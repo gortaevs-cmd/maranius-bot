@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Деплой maranius на Hip prod (polling + SOCKS). Запуск с Mac из папки maranius/.
+# Ручной rsync-деплой отключён: production принимает только проверенный
+# контейнер из GitHub Actions через ограниченный SSH-доступ.
 set -euo pipefail
 
+echo "Manual production deploy is disabled. Push main and use GitHub Actions."
+exit 1
+
+# Legacy implementation retained below only for historical reference.
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOST="${MARANIUS_DEPLOY_HOST:-deploy@194.190.153.173}"
+HOST="${MARANIUS_DEPLOY_HOST:-deploy@94.241.142.242}"
 REMOTE="/opt/apps/maranius"
 
 PY_FILES=(

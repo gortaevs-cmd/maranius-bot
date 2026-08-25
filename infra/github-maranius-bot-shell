@@ -1,0 +1,4 @@
+#!/bin/sh
+# Forced shell for the GitHub Actions account. The root-owned target parses
+# SSH_ORIGINAL_COMMAND and accepts only a verified image stream and deploy SHA.
+exec /usr/bin/sudo -n /opt/infra/scripts/deploy-maranius-bot.sh

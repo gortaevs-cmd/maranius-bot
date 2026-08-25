@@ -1,0 +1,1 @@
+github-maranius-bot ALL=(root) NOPASSWD: /opt/infra/scripts/deploy-maranius-bot.sh

@@ -1,0 +1,22 @@
+services:
+  maranius:
+    build:
+      context: .
+    container_name: maranius
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # Контейнер обращается к SOCKS-туннелю, работающему на самом сервере.
+      TELEGRAM_PROXY_URL: socks5h://host.docker.internal:1080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Код и JSON/PDF-данные остаются в папке проекта на сервере.
+      # Обновление кода требует пересборки и restart контейнера.
+      - ./:/app
+    security_opt:
+      - no-new-privileges:true
