@@ -13,7 +13,6 @@ from telegram import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    WebAppInfo,
 )
 
 # --- Главное меню (reply, всегда внизу) ---
@@ -646,9 +645,9 @@ def get_contact_inline_keyboard(*, with_back: bool = False) -> InlineKeyboardMar
 
 
 def get_store_inline_keyboard() -> InlineKeyboardMarkup:
-    """Открывает каталог во встроенном окне Telegram с UTM-метками."""
+    """Ссылка на каталог с UTM-метками для Яндекс Метрики."""
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(BTN_STORE_OPEN, web_app=WebAppInfo(url=URL_CATALOG))]]
+        [[InlineKeyboardButton(BTN_STORE_OPEN, url=URL_CATALOG)]]
     )
 
 
