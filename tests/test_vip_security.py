@@ -35,8 +35,24 @@ class VipCodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await vip_codes.rollback_redemption("SAFE-CODE", user_id=7))
         self.assertEqual(await vip_codes.counts(), (1, 0))
 
+    async def test_preview_counts_new_duplicates_and_blank_lines(self):
+        await vip_codes.add_codes_bulk("USED")
+        preview = await vip_codes.preview_codes_bulk("NEW\nUSED\n\n# comment\nNEW")
+        self.assertEqual(preview, (1, 2, 1))
+
 
 class AdminGuardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_regular_user_god_command_does_not_save_profile(self):
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999999),
+            effective_message=message,
+        )
+        with patch.object(bot, "ensure_user_saved", new=AsyncMock()) as ensure_saved:
+            await bot.god_cmd(update, SimpleNamespace())
+        ensure_saved.assert_not_awaited()
+        message.reply_text.assert_awaited_once()
+
     async def test_regular_user_cannot_use_admin_callback(self):
         message = SimpleNamespace(reply_text=AsyncMock())
         update = SimpleNamespace(

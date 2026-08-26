@@ -85,6 +85,19 @@ Retention: **90 дней**. Миграция из `data/angelic/unknown_angelic.
 **/god и алерты:** только `SEED_ADMIN_IDS` (186758977).
 
 ---
+## `admin_audit.json`
+
+**Статус:** реализовано (`integrations/admin_audit.py`); в production лежит в `/app/.runtime`.
+
+Каждая запись в `events[]` содержит `id`, `created_at`, `actor_id`, `action`,
+`target_ids`, обязательное `reason` (до 200 символов) и безопасный `meta` с итогами
+пакетной операции. Фиксируются выдача/снятие VIP, ручное ограничение, решения по
+VIP-алертам, импорт VIP и добавление кодов.
+
+Retention: **365 дней**, максимум **20 000 записей**. Доступны последние действия и
+контролируемая CSV-выгрузка только в `/god` для seed-админа.
+
+---
 ## `data/platform_users.json`
 
 **Статус:** реализовано (`integrations/platform_db.py`).
@@ -129,14 +142,18 @@ Retention: **90 дней**. Миграция из `data/angelic/unknown_angelic.
 
 | Сегмент | Критерий |
 |---------|----------|
-| `subscribed` | `bot_status != blocked` |
-| `unsubscribed` | `bot_status == blocked` |
+| `available` | бот не заблокирован пользователем (`bot_status != blocked`) |
+| `bot_blocked` | пользователь заблокировал бот (`bot_status == blocked`) |
 | `no_policy` | нет `policy_accepted_at` |
-| `marketing` | `marketing_opt_in` |
-| `vip` | `vip == true` |
+| `marketing_opt_in` | есть согласие на маркетинговые сообщения |
+| `marketing_ready` | согласие и политика есть, бот доступен, нет ручного стоп-листа и `is_internal` |
+| `vip_access` | `vip == true`, то есть доступ, а не подтверждённая покупка |
 | `active_7` / `active_30` | `last_seen` ≤ 7 / 30 дней |
 | `sleeping` | `last_seen` > 30 дней |
 | `admin_blocked` | `admin_blocked` |
+
+Старые технические имена `subscribed`, `unsubscribed`, `marketing` и `vip` сохранены
+для совместимости, но в интерфейсе больше не показываются.
 
 ---
 
@@ -147,3 +164,4 @@ Retention: **90 дней**. Миграция из `data/angelic/unknown_angelic.
 | 2026-04-03 | Первичное описание существующих JSON и плановых полей |
 | 2026-08-15 | users: согласия, bot_status, inbox, analytics, сегменты, zenclass stub |
 | 2026-08-15 | Убраны Zenclass-поля и индексы; API-эндпоинты SmartBotPro удалены; fastapi/uvicorn убраны из зависимостей |
+| 2026-08-26 | безопасный сегмент `marketing_ready`, аудит `/god`, подтверждение пакетных VIP-операций |

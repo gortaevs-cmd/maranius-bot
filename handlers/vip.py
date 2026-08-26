@@ -350,6 +350,7 @@ async def vip_approve_callback(
     admin_guard: Callable[[Update], Any],
     grant_vip: Callable[[int], Any],
     main_keyboard_for: Optional[Callable[[int], Any]] = None,
+    audit_action: Optional[Callable[[str, int], Any]] = None,
 ) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -364,6 +365,8 @@ async def vip_approve_callback(
         except ValueError:
             return
         await grant_vip(target_id)
+        if audit_action:
+            await audit_action("vip_grant_from_alert", target_id)
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -385,6 +388,8 @@ async def vip_approve_callback(
             target_id = int(query.data[len(ui.CB_VIP_REJECT_PREFIX) :])
         except ValueError:
             return
+        if audit_action:
+            await audit_action("vip_reject_from_alert", target_id)
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -446,45 +451,4 @@ async def admin_vip_import_prompt(update: Update, context: ContextTypes.DEFAULT_
         ui.ADMIN_VIP_IMPORT_PROMPT,
         parse_mode="HTML",
         reply_markup=ui.get_admin_vip_prompt_keyboard(),
-    )
-
-
-async def admin_vip_add_codes(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    context.user_data.pop("admin_mode", None)
-    added, dup, skipped = await vip_codes.add_codes_bulk(text)
-    await update.message.reply_text(
-        ui.ADMIN_VIP_ADD_RESULT.format(added=added, dup=dup, skipped=skipped),
-        parse_mode="HTML",
-        reply_markup=ui.get_admin_vip_keyboard(),
-    )
-
-
-async def admin_vip_import_users(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    text: str,
-    *,
-    users_lock,
-    load_users,
-    save_users,
-) -> None:
-    context.user_data.pop("admin_mode", None)
-    ids, invalid = vip_codes.parse_vip_user_ids(text)
-    granted = skipped = 0
-    async with users_lock:
-        users = load_users()
-        for uid in ids:
-            if vip_codes.grant_vip_in_users(users, uid, source="import"):
-                granted += 1
-            else:
-                skipped += 1
-        save_users(users)
-    await update.message.reply_text(
-        ui.ADMIN_VIP_IMPORT_RESULT.format(
-            granted=granted,
-            skipped=skipped,
-            invalid=invalid,
-        ),
-        parse_mode="HTML",
-        reply_markup=ui.get_admin_vip_keyboard(),
     )

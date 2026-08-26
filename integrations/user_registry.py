@@ -254,18 +254,26 @@ def days_since_last_seen(row: Dict[str, Any]) -> Optional[int]:
 
 def segment_filter(name: str) -> Callable[[Dict[str, Any]], bool]:
     """Предикат сегмента для экспорта."""
-    if name == "subscribed":
+    if name in ("subscribed", "available"):
         return lambda r: r.get("bot_status", "active") != "blocked"
-    if name == "unsubscribed":
+    if name in ("unsubscribed", "bot_blocked"):
         return lambda r: r.get("bot_status") == "blocked"
     if name == "no_policy":
         return lambda r: not r.get("policy_accepted_at")
     if name == "with_policy":
         return lambda r: bool(r.get("policy_accepted_at"))
-    if name == "marketing":
+    if name in ("marketing", "marketing_opt_in"):
         return lambda r: bool(r.get("marketing_opt_in"))
-    if name == "vip":
+    if name in ("vip", "vip_access"):
         return lambda r: bool(r.get("vip"))
+    if name == "marketing_ready":
+        return lambda r: (
+            bool(r.get("marketing_opt_in"))
+            and bool(r.get("policy_accepted_at"))
+            and r.get("bot_status", "active") != "blocked"
+            and not bool(r.get("admin_blocked"))
+            and not bool(r.get("is_internal"))
+        )
     if name == "admin_blocked":
         return lambda r: bool(r.get("admin_blocked"))
     if name == "active_7":

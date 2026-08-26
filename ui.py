@@ -370,6 +370,7 @@ CB_ADMIN_MENU_LISTS = "admin:menu:lists"
 CB_ADMIN_MENU_USERS = "admin:menu:users"
 CB_ADMIN_MENU_BOT = "admin:menu:bot"
 CB_ADMIN_MENU_VIP = "admin:menu:vip"
+CB_ADMIN_MENU_AUDIT = "admin:menu:audit"
 CB_ADMIN_INBOX = "admin:inbox"
 CB_ADMIN_INBOX_CSV = "admin:inbox_csv"
 CB_ADMIN_LIST_ALL = "admin:list:all"
@@ -381,12 +382,18 @@ CB_ADMIN_VIP_EXPORT = "admin:vip_export"
 CB_ADMIN_VIP_ADD = "admin:vip_add"
 CB_ADMIN_VIP_IMPORT = "admin:vip_import"
 CB_ADMIN_VIP_CANCEL = "admin:vip_cancel"
+CB_ADMIN_AUDIT = "admin:audit"
+CB_ADMIN_AUDIT_CSV = "admin:audit_csv"
+CB_ADMIN_USER_FIND = "admin:user:find"
+CB_ADMIN_USER_BACK = "admin:user:back"
 CB_ADMIN_USER_VIP_ON = "admin:user:vip:on"
 CB_ADMIN_USER_VIP_OFF = "admin:user:vip:off"
 CB_ADMIN_USER_BLOCK = "admin:user:block"
 CB_ADMIN_USER_UNBLOCK = "admin:user:unblock"
 CB_ADMIN_CONFIRM = "admin:confirm"
 CB_ADMIN_CANCEL = "admin:cancel"
+CB_ADMIN_BATCH_CONFIRM = "admin:batch:confirm"
+CB_ADMIN_BATCH_CANCEL = "admin:batch:cancel"
 
 # Legacy callbacks (redirect to inbox)
 CB_ADMIN_MENU_ANGELS = "admin:menu:angels"
@@ -398,6 +405,7 @@ ADMIN_BTN_HOME_LISTS = "📋 Списки"
 ADMIN_BTN_HOME_USERS = "👤 Пользователи"
 ADMIN_BTN_HOME_BOT = "ℹ️ Бот"
 ADMIN_BTN_HOME_VIP = "🔑 VIP"
+ADMIN_BTN_HOME_AUDIT = "🧾 Журнал действий"
 ADMIN_BTN_BACK = "◀️ Назад"
 ADMIN_BTN_INBOX = "📥 Сводка Inbox"
 ADMIN_BTN_INBOX_CSV = "📎 CSV Inbox"
@@ -409,6 +417,13 @@ ADMIN_BTN_VIP_EXPORT = "📎 Выгрузка кодов"
 ADMIN_BTN_VIP_ADD = "➕ Добавить коды"
 ADMIN_BTN_VIP_IMPORT = "👑 Импорт VIP"
 ADMIN_BTN_VIP_CANCEL = "✖️ Отмена ввода"
+ADMIN_BTN_AUDIT = "🧾 Последние действия"
+ADMIN_BTN_AUDIT_CSV = "📎 CSV журнала"
+ADMIN_BTN_USER_FIND = "🔎 Найти пользователя"
+ADMIN_BTN_USER_VIP_ON = "🔑 Выдать VIP"
+ADMIN_BTN_USER_VIP_OFF = "🔓 Снять VIP"
+ADMIN_BTN_USER_BLOCK = "⛔ Ограничить доступ"
+ADMIN_BTN_USER_UNBLOCK = "✅ Снять ограничение"
 
 # Legacy labels
 ADMIN_BTN_HOME_ANGELS = "👼 Ангелы"
@@ -426,17 +441,30 @@ ADMIN_VIP_SUMMARY = (
 )
 ADMIN_VIP_ADD_PROMPT = (
     "Вставь коды <b>одним сообщением</b> — по одному на строку.\n"
-    "Строки с # в начале игнорируются."
+    "Строки с # в начале игнорируются. Затем укажи основание и подтверди операцию."
 )
 ADMIN_VIP_ADD_RESULT = (
-    "Готово: добавлено <b>{added}</b>, дублей <b>{dup}</b>, пустых <b>{skipped}</b>."
+    "Готово: добавлено <b>{added}</b>, дублей <b>{dup}</b>, пустых <b>{skipped}</b>.\n"
+    "Действие записано в журнал."
 )
 ADMIN_VIP_IMPORT_PROMPT = (
-    "Вставь список <b>telegram_id</b> (по строке) или CSV с id в первой колонке."
+    "Вставь список <b>telegram_id</b> (по строке) или CSV с id в первой колонке.\n"
+    "Бот покажет предпросмотр, запросит основание и подтверждение. Уведомления пользователям не отправляются."
 )
 ADMIN_VIP_IMPORT_RESULT = (
     "VIP импорт: выдано <b>{granted}</b>, уже были VIP <b>{skipped}</b>, "
-    "ошибок строк <b>{invalid}</b>."
+    "дублей в списке <b>{duplicates}</b>, ошибок строк <b>{invalid}</b>.\n"
+    "Действие записано в журнал; пользователям сообщения не отправлялись."
+)
+ADMIN_BATCH_REASON_PROMPT = "Укажи основание операции одним сообщением (от 3 до 200 символов)."
+ADMIN_BATCH_CODE_PREVIEW = (
+    "Коды: будет добавлено <b>{added}</b>, дублей <b>{dup}</b>, пустых <b>{skipped}</b>.\n"
+    "Основание: <code>{reason}</code>\n\nПодтвердить?"
+)
+ADMIN_BATCH_IMPORT_PREVIEW = (
+    "Импорт VIP-доступа: будет выдано <b>{granted}</b>, уже VIP <b>{skipped}</b>, "
+    "дублей в списке <b>{duplicates}</b>, ошибок строк <b>{invalid}</b>.\n"
+    "Основание: <code>{reason}</code>\n\nПодтвердить?"
 )
 ADMIN_VIP_WRONG_CODE = (
     "⚠️ Неверный VIP-код\n"
@@ -456,9 +484,10 @@ ADMIN_MENU_LISTS = (
     "<b>Списки</b> — выгрузка сегментов пользователей или единый CSV."
 )
 ADMIN_MENU_USERS = (
-    "<b>Пользователи</b> — VIP / блок по id или @username.\n"
-    "Формат: <code>vip 123456789</code>, <code>block @nick</code>, "
-    "<code>unvip id</code>, <code>unblock id</code>."
+    "<b>Пользователи</b> — найди человека по Telegram ID или @username и выбери действие.\n"
+    "Текстовый формат тоже доступен: <code>vip 123456789 основание</code>, "
+    "<code>block @nick основание</code>, <code>unvip id основание</code>, "
+    "<code>unblock id основание</code>."
 )
 ADMIN_MENU_ANGELS = ADMIN_MENU_INBOX
 ADMIN_MENU_BOT = (
@@ -467,6 +496,10 @@ ADMIN_MENU_BOT = (
 ADMIN_MENU_VIP = (
     "<b>VIP</b> — коды доступа, выгрузка и импорт пользователей."
 )
+ADMIN_MENU_AUDIT = (
+    "<b>Журнал действий</b> — выдача и снятие VIP, ограничения, импорт и добавление кодов.\n"
+    "Хранение: 365 дней, не более 20 000 записей."
+)
 
 ADMIN_INBOX_EMPTY = "Inbox пуст."
 ADMIN_INBOX_SUMMARY = (
@@ -474,7 +507,10 @@ ADMIN_INBOX_SUMMARY = (
     "без уведомления админу: <b>{unnotified}</b>.\n\n"
     f"CSV: «{ADMIN_BTN_INBOX_CSV}»."
 )
-ADMIN_LISTS_HINT = "Выбери сегмент для CSV или «Все пользователи»."
+ADMIN_LISTS_HINT = (
+    "Выбери сегмент для CSV. «Готовы к рассылке» исключает internal, "
+    "заблокировавших бота и ручной стоп-лист."
+)
 ADMIN_USERS_SUMMARY = (
     "Пользователи: <b>{total}</b> всего (<b>{real}</b> без internal), "
     "<b>{week}</b> новых за 7 дней.\n"
@@ -483,7 +519,28 @@ ADMIN_USERS_SUMMARY = (
 )
 ADMIN_USER_CMD_OK = "Готово: {action} для <code>{target}</code>."
 ADMIN_USER_CMD_FAIL = "Не нашёл пользователя: <code>{target}</code>."
-ADMIN_CONFIRM_PROMPT = "Подтвердить: <b>{action}</b> для <code>{target}</code>?"
+ADMIN_USER_PROTECTED = "Нельзя изменить доступ seed-администратора."
+ADMIN_USER_CMD_REASON_REQUIRED = (
+    "Добавь основание операции (от 3 символов), например: "
+    "<code>vip 123456789 подарок за курс</code>."
+)
+ADMIN_USER_FIND_PROMPT = "Пришли Telegram ID или @username пользователя."
+ADMIN_USER_CARD = (
+    "<b>Пользователь</b>\n"
+    "ID: <code>{user_id}</code>\n"
+    "Username: {username}\n"
+    "VIP-доступ: <b>{vip}</b> ({vip_source})\n"
+    "Бот: <b>{bot_status}</b> · ручной стоп-лист: <b>{admin_blocked}</b>\n"
+    "Согласие на рассылку: <b>{marketing}</b> · ПДн: <b>{policy}</b>\n"
+    "Последняя активность: <code>{last_seen}</code>\n\n"
+    "Выбери действие — затем потребуется основание и подтверждение."
+)
+ADMIN_CONFIRM_PROMPT = (
+    "Подтвердить: <b>{action}</b> для <code>{target}</code>?\n"
+    "Основание: <code>{reason}</code>"
+)
+ADMIN_AUDIT_EMPTY = "Журнал действий пока пуст."
+ADMIN_AUDIT_SUMMARY = "<b>Последние действия</b>\n{rows}"
 BTN_CONFIRM_YES = "✅ Да"
 BTN_CONFIRM_NO = "❌ Отмена"
 ADMIN_STATUS = (
@@ -566,6 +623,7 @@ def get_admin_home_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(ADMIN_BTN_HOME_BOT, callback_data=CB_ADMIN_MENU_BOT),
             ],
             [InlineKeyboardButton(ADMIN_BTN_HOME_VIP, callback_data=CB_ADMIN_MENU_VIP)],
+            [InlineKeyboardButton(ADMIN_BTN_HOME_AUDIT, callback_data=CB_ADMIN_MENU_AUDIT)],
         ]
     )
 
@@ -582,11 +640,12 @@ def get_admin_inbox_keyboard() -> InlineKeyboardMarkup:
 
 def get_admin_lists_keyboard() -> InlineKeyboardMarkup:
     segments = [
-        ("Подписанные", "subscribed"),
-        ("Отписавшиеся", "unsubscribed"),
+        ("Бот доступен", "available"),
+        ("Заблокировали бота", "bot_blocked"),
         ("Без ПДн", "no_policy"),
-        ("Рассылка", "marketing"),
-        ("VIP", "vip"),
+        ("Есть согласие", "marketing_opt_in"),
+        ("Готовы к рассылке", "marketing_ready"),
+        ("VIP-доступ", "vip_access"),
         ("Активные 7д", "active_7"),
         ("Активные 30д", "active_30"),
         ("Спящие", "sleeping"),
@@ -611,7 +670,10 @@ def get_admin_lists_keyboard() -> InlineKeyboardMarkup:
 
 def get_admin_users_manage_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(ADMIN_BTN_BACK, callback_data=CB_ADMIN_HOME)]]
+        [
+            [InlineKeyboardButton(ADMIN_BTN_USER_FIND, callback_data=CB_ADMIN_USER_FIND)],
+            [InlineKeyboardButton(ADMIN_BTN_BACK, callback_data=CB_ADMIN_HOME)],
+        ]
     )
 
 
@@ -626,6 +688,33 @@ def get_admin_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def get_admin_batch_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(BTN_CONFIRM_YES, callback_data=CB_ADMIN_BATCH_CONFIRM),
+                InlineKeyboardButton(BTN_CONFIRM_NO, callback_data=CB_ADMIN_BATCH_CANCEL),
+            ]
+        ]
+    )
+
+
+def get_admin_user_card_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(ADMIN_BTN_USER_VIP_ON, callback_data=CB_ADMIN_USER_VIP_ON),
+                InlineKeyboardButton(ADMIN_BTN_USER_VIP_OFF, callback_data=CB_ADMIN_USER_VIP_OFF),
+            ],
+            [
+                InlineKeyboardButton(ADMIN_BTN_USER_BLOCK, callback_data=CB_ADMIN_USER_BLOCK),
+                InlineKeyboardButton(ADMIN_BTN_USER_UNBLOCK, callback_data=CB_ADMIN_USER_UNBLOCK),
+            ],
+            [InlineKeyboardButton(ADMIN_BTN_BACK, callback_data=CB_ADMIN_USER_BACK)],
+        ]
+    )
+
+
 def get_admin_angels_keyboard() -> InlineKeyboardMarkup:
     return get_admin_inbox_keyboard()
 
@@ -635,6 +724,16 @@ def get_admin_bot_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(ADMIN_BTN_USERS, callback_data=CB_ADMIN_USERS)],
             [InlineKeyboardButton(ADMIN_BTN_STATUS, callback_data=CB_ADMIN_STATUS)],
+            [InlineKeyboardButton(ADMIN_BTN_BACK, callback_data=CB_ADMIN_HOME)],
+        ]
+    )
+
+
+def get_admin_audit_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(ADMIN_BTN_AUDIT, callback_data=CB_ADMIN_AUDIT)],
+            [InlineKeyboardButton(ADMIN_BTN_AUDIT_CSV, callback_data=CB_ADMIN_AUDIT_CSV)],
             [InlineKeyboardButton(ADMIN_BTN_BACK, callback_data=CB_ADMIN_HOME)],
         ]
     )

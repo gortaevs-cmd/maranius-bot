@@ -65,30 +65,49 @@ def _used_codes(data: Dict[str, Any]) -> Set[str]:
     return out
 
 
-async def add_codes_bulk(raw_text: str) -> Tuple[int, int, int]:
-    """Добавить коды списком. Returns (added, duplicates, skipped_empty)."""
-    lines = [ln.strip() for ln in (raw_text or "").splitlines()]
-    codes_in = [ln for ln in lines if ln and not ln.startswith("#")]
+def _analyze_codes_bulk(data: Dict[str, Any], raw_text: str) -> Tuple[List[str], int, int]:
+    """Вернуть новые коды, дубли и пустые строки без изменения хранилища."""
+    active = _active_set(data)
+    used = _used_codes(data)
+    new_codes: List[str] = []
+    duplicates = skipped = 0
+    for line in (raw_text or "").splitlines():
+        raw = line.strip()
+        if not raw:
+            skipped += 1
+            continue
+        if raw.startswith("#"):
+            continue
+        norm = normalize_code(raw)
+        if not norm:
+            skipped += 1
+            continue
+        if norm in active or norm in used:
+            duplicates += 1
+            continue
+        new_codes.append(norm)
+        active.add(norm)
+    return new_codes, duplicates, skipped
+
+
+async def preview_codes_bulk(raw_text: str) -> Tuple[int, int, int]:
+    """Предпросмотр добавления кодов: new, duplicates, blank_lines."""
     async with _lock:
         data = _load_unlocked()
-        active = _active_set(data)
-        used = _used_codes(data)
-        added = dup = skipped = 0
+        new_codes, duplicates, skipped = _analyze_codes_bulk(data, raw_text)
+    return len(new_codes), duplicates, skipped
+
+
+async def add_codes_bulk(raw_text: str) -> Tuple[int, int, int]:
+    """Добавить коды списком. Returns (added, duplicates, skipped_empty)."""
+    async with _lock:
+        data = _load_unlocked()
+        new_codes, duplicates, skipped = _analyze_codes_bulk(data, raw_text)
         new_active: List[str] = list(data.get("active", []))
-        for raw in codes_in:
-            norm = normalize_code(raw)
-            if not norm:
-                skipped += 1
-                continue
-            if norm in active or norm in used:
-                dup += 1
-                continue
-            new_active.append(norm)
-            active.add(norm)
-            added += 1
+        new_active.extend(new_codes)
         data["active"] = new_active
         _save_unlocked(data)
-        return added, dup, skipped
+        return len(new_codes), duplicates, skipped
 
 
 async def redeem_code(

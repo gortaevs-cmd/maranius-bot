@@ -4,6 +4,7 @@
 .venv/
 users.json
 admins.json
+admin_audit.json
 events.json
 monitored_chats.json
 data/platform_users.json
