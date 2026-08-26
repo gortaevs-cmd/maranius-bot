@@ -2,9 +2,7 @@
 
 Актуальная карта функций и служебных механизмов. Подробная карта кнопок: [ИНТЕРФЕЙС_МЕНЮ_И_КОМАНДЫ.md](./ИНТЕРФЕЙС_МЕНЮ_И_КОМАНДЫ.md).
 
-**Боевой бот:** `@MaraniusBOT`, `BOT_PROFILE=prod`.
-
-**Стенд:** `@angelic_signs_bot`, `BOT_PROFILE=test`.
+**Боевой бот:** `@MaraniusBOT`, `BOT_PROFILE=prod`. Prod-only: локальный `bot.py` не используется (Conflict с TimeWeb).
 
 ## Команды Telegram
 
@@ -67,11 +65,12 @@
 
 | Переменная | Назначение |
 |------------|------------|
-| `BOT_PROFILE` | `test` или `prod` |
-| `BOT_TOKEN_TEST` | Токен стенда |
-| `BOT_TOKEN_PROD` | Токен боевого бота |
+| `BOT_PROFILE` | Только `prod` |
+| `BOT_TOKEN_PROD` | Токен боевого `@MaraniusBOT` |
 | `TELEGRAM_PROXY_URL` | SOCKS-туннель на TimeWeb; в боевом Docker Compose задаётся автоматически |
 | `MARANIUS_RUNTIME_DIR` | В production `/app/.runtime`; хранит mutable JSON отдельно от образа |
+
+Локальный запуск бота не используется: разработка — unit-тесты + GitHub Actions.
 
 ## Журнал
 
@@ -80,4 +79,5 @@
 | 2026-08-12 | Новое reply-меню; старые Zenclass и HTTP API удалены |
 | 2026-08-15 | Согласия, VIP, ежедневные практики, локальные сутки, восстановление JSON, безопасный деплой и обработка сбоев |
 | 2026-08-16 | Все изменения зафиксированы в Git; добавлены автопроверки GitHub Actions |
-| 2026-08-26 | `/god`: безопасный сегмент, поиск пользователя, подтверждение пакетных операций и журнал действий |
+| 2026-08-26 | consent_log, marketing_opt_out_at, start_param, re-consent, расширенный CSV; tags убран |
+| 2026-08-26 | Maranius prod-only в документации; стенд `@angelic_signs_bot` выведен из Maranius |

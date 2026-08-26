@@ -17,12 +17,13 @@ class AsyncLock:
 
 class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
     def make_update(self, user_id: int = 42):
-        user = SimpleNamespace(id=user_id)
-        message = SimpleNamespace(reply_text=AsyncMock())
+        user = SimpleNamespace(id=user_id, username=None, is_bot=False)
+        message = SimpleNamespace(reply_text=AsyncMock(), text="")
         chat = SimpleNamespace(id=user_id)
         return SimpleNamespace(
             effective_user=user,
             effective_message=message,
+            message=message,
             effective_chat=chat,
         )
 
@@ -30,6 +31,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         update = self.make_update()
         context = SimpleNamespace(
             user_data={},
+            args=[],
             bot=SimpleNamespace(set_chat_menu_button=AsyncMock()),
         )
 
@@ -53,9 +55,10 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         update = self.make_update()
         context = SimpleNamespace(
             user_data={},
+            args=[],
             bot=SimpleNamespace(set_chat_menu_button=AsyncMock()),
         )
-        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z"}}
+        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z", "policy_version": "2024-08-03"}}
 
         with (
             patch.object(bot, "_load_users", return_value=users),
@@ -64,7 +67,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await bot.start(update, context)
 
-        save_profile.assert_awaited_once_with(update, bot=context.bot)
+        save_profile.assert_awaited_once_with(update, bot=context.bot, force=False)
         update.effective_message.reply_text.assert_awaited_once()
         context.bot.set_chat_menu_button.assert_awaited_once()
 
@@ -109,7 +112,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("first_name", saved["42"])
 
     async def test_marketing_choice_continues_pending_start(self):
-        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z"}}
+        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z", "policy_version": "2024-08-03"}}
         query = SimpleNamespace(
             data=ui.CB_MARKETING_YES,
             from_user=SimpleNamespace(id=42),
@@ -132,12 +135,26 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         query.message.reply_text.assert_not_awaited()
 
     async def test_marketing_refusal_does_not_remove_policy_access(self):
-        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z"}}
+        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z", "policy_version": "2024-08-03"}}
         query = SimpleNamespace(data=ui.CB_MARKETING_NO, from_user=SimpleNamespace(id=42), answer=AsyncMock(), message=SimpleNamespace(reply_text=AsyncMock()))
         context = SimpleNamespace(user_data={})
         await consent_handlers.consent_callback(update=SimpleNamespace(callback_query=query), context=context, users_lock=AsyncLock(), load_users=lambda: users, save_users=lambda _v: None)
         self.assertFalse(users["42"]["marketing_opt_in"])
         self.assertIn("policy_accepted_at", users["42"])
+
+    async def test_handle_text_does_not_save_profile_without_policy(self):
+        update = self.make_update()
+        update.message.text = "привет"
+        context = SimpleNamespace(user_data={}, bot=SimpleNamespace())
+
+        with (
+            patch.object(bot, "_load_users", return_value={}),
+            patch.object(bot, "ensure_user_saved", new=AsyncMock()) as save_profile,
+            patch.object(bot, "_require_access", new=AsyncMock(return_value=False)),
+        ):
+            await bot.handle_text(update, context)
+
+        save_profile.assert_not_awaited()
 
     async def test_pending_angel_is_continued_after_policy(self):
         update = self.make_update()

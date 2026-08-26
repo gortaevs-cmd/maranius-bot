@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import bot
-from integrations import admin_audit, user_registry, vip_codes
+from integrations import admin_audit, consent_log, user_registry, vip_codes
 
 
 class AdminSegmentsTests(unittest.TestCase):
@@ -14,6 +14,7 @@ class AdminSegmentsTests(unittest.TestCase):
         ready = {
             "marketing_opt_in": True,
             "policy_accepted_at": "2026-08-01T00:00:00Z",
+            "policy_version": "2024-08-03",
             "bot_status": "active",
             "admin_blocked": False,
             "is_internal": False,
@@ -54,6 +55,21 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
             recent = await admin_audit.recent(path)
             self.assertEqual(len(recent), 1)
             self.assertIn("vip_import", (await admin_audit.export_csv_bytes(path)).decode("utf-8-sig"))
+
+    async def test_consent_log_exports_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "consent_log.json"
+            await consent_log.append(
+                path,
+                user_id=42,
+                event="policy_accepted",
+                value=True,
+                policy_version="2024-08-03",
+                source="gate",
+            )
+            csv_text = (await consent_log.export_csv_bytes(path)).decode("utf-8-sig")
+            self.assertIn("policy_accepted", csv_text)
+            self.assertIn("42", csv_text)
 
     async def test_confirming_code_batch_writes_codes_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:

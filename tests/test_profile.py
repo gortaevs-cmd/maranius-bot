@@ -23,6 +23,7 @@ class ProfileKeyboardTests(unittest.TestCase):
             "42": {
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": "2024-08-03",
                 "marketing_opt_in": False,
             }
         }
@@ -37,6 +38,7 @@ class ProfileKeyboardTests(unittest.TestCase):
             "42": {
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": "2024-08-03",
                 "marketing_opt_in": True,
             }
         }

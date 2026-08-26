@@ -44,7 +44,9 @@ _PRESERVE_KEYS = (
     "admin_blocked",
     "admin_blocked_at",
     "is_internal",
-    "tags",
+    "marketing_opt_out_at",
+    "start_param",
+    "start_param_at",
 )
 
 
@@ -128,6 +130,14 @@ def has_policy(users: Dict[str, Any], user_id: int) -> bool:
     return bool(row.get("policy_accepted_at"))
 
 
+def has_current_policy(users: Dict[str, Any], user_id: int) -> bool:
+    """Актуальная версия политики принята (для gate и доступа к функциям)."""
+    row = get_user(users, user_id)
+    if not row.get("policy_accepted_at"):
+        return False
+    return row.get("policy_version") == POLICY_VERSION
+
+
 def accept_policy(users: Dict[str, Any], user_id: int) -> None:
     uid = str(user_id)
     row = users.setdefault(uid, {"id": user_id})
@@ -139,7 +149,26 @@ def set_marketing_opt_in(users: Dict[str, Any], user_id: int, value: bool) -> No
     uid = str(user_id)
     row = users.setdefault(uid, {"id": user_id})
     row["marketing_opt_in"] = value
-    row["marketing_opt_in_at"] = now_iso()
+    ts = now_iso()
+    if value:
+        row["marketing_opt_in_at"] = ts
+        row.pop("marketing_opt_out_at", None)
+    else:
+        row["marketing_opt_out_at"] = ts
+
+
+def capture_start_param(users: Dict[str, Any], user_id: int, payload: str) -> bool:
+    """Сохранить deep-link /start payload один раз. Returns True если записали впервые."""
+    text = " ".join((payload or "").split())[:200]
+    if not text:
+        return False
+    uid = str(user_id)
+    row = users.setdefault(uid, {"id": user_id})
+    if row.get("start_param"):
+        return False
+    row["start_param"] = text
+    row["start_param_at"] = now_iso()
+    return True
 
 
 def mark_marketing_offer_shown(users: Dict[str, Any], user_id: int) -> None:
@@ -259,9 +288,9 @@ def segment_filter(name: str) -> Callable[[Dict[str, Any]], bool]:
     if name in ("unsubscribed", "bot_blocked"):
         return lambda r: r.get("bot_status") == "blocked"
     if name == "no_policy":
-        return lambda r: not r.get("policy_accepted_at")
+        return lambda r: not r.get("policy_accepted_at") or r.get("policy_version") != POLICY_VERSION
     if name == "with_policy":
-        return lambda r: bool(r.get("policy_accepted_at"))
+        return lambda r: bool(r.get("policy_accepted_at")) and r.get("policy_version") == POLICY_VERSION
     if name in ("marketing", "marketing_opt_in"):
         return lambda r: bool(r.get("marketing_opt_in"))
     if name in ("vip", "vip_access"):
@@ -270,6 +299,7 @@ def segment_filter(name: str) -> Callable[[Dict[str, Any]], bool]:
         return lambda r: (
             bool(r.get("marketing_opt_in"))
             and bool(r.get("policy_accepted_at"))
+            and r.get("policy_version") == POLICY_VERSION
             and r.get("bot_status", "active") != "blocked"
             and not bool(r.get("admin_blocked"))
             and not bool(r.get("is_internal"))
@@ -306,10 +336,16 @@ def export_users_csv(
             "username",
             "first_name",
             "last_name",
+            "language_code",
+            "timezone",
             "bot_status",
+            "blocked_at",
             "policy_accepted_at",
             "policy_version",
             "marketing_opt_in",
+            "marketing_opt_in_at",
+            "marketing_opt_out_at",
+            "start_param",
             "vip",
             "vip_source",
             "vip_granted_at",
@@ -328,10 +364,16 @@ def export_users_csv(
                 row.get("username") or "",
                 row.get("first_name") or "",
                 row.get("last_name") or "",
+                row.get("language_code") or "",
+                row.get("timezone") or "",
                 row.get("bot_status") or "active",
+                row.get("blocked_at") or "",
                 row.get("policy_accepted_at") or "",
                 row.get("policy_version") or "",
                 "1" if row.get("marketing_opt_in") else "0",
+                row.get("marketing_opt_in_at") or "",
+                row.get("marketing_opt_out_at") or "",
+                row.get("start_param") or "",
                 "1" if row.get("vip") else "0",
                 row.get("vip_source") or "",
                 row.get("vip_granted_at") or "",
@@ -369,7 +411,7 @@ def stats_summary(users: Dict[str, Any]) -> Dict[str, int]:
         out["real"] += 1
         if row.get("vip"):
             out["vip"] += 1
-        if not row.get("policy_accepted_at"):
+        if not row.get("policy_accepted_at") or row.get("policy_version") != POLICY_VERSION:
             out["no_policy"] += 1
         if row.get("marketing_opt_in"):
             out["marketing"] += 1
@@ -417,7 +459,7 @@ def show_marketing_subscribe_in_main_menu(
     row = get_user(users, user_id)
     if row.get("is_internal"):
         return False
-    if not has_policy(users, user_id):
+    if not has_current_policy(users, user_id):
         return False
     return not bool(row.get("marketing_opt_in"))
 

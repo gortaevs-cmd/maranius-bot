@@ -384,6 +384,8 @@ CB_ADMIN_VIP_IMPORT = "admin:vip_import"
 CB_ADMIN_VIP_CANCEL = "admin:vip_cancel"
 CB_ADMIN_AUDIT = "admin:audit"
 CB_ADMIN_AUDIT_CSV = "admin:audit_csv"
+CB_ADMIN_CONSENT = "admin:consent"
+CB_ADMIN_CONSENT_CSV = "admin:consent_csv"
 CB_ADMIN_USER_FIND = "admin:user:find"
 CB_ADMIN_USER_BACK = "admin:user:back"
 CB_ADMIN_USER_VIP_ON = "admin:user:vip:on"
@@ -419,6 +421,8 @@ ADMIN_BTN_VIP_IMPORT = "👑 Импорт VIP"
 ADMIN_BTN_VIP_CANCEL = "✖️ Отмена ввода"
 ADMIN_BTN_AUDIT = "🧾 Последние действия"
 ADMIN_BTN_AUDIT_CSV = "📎 CSV журнала"
+ADMIN_BTN_CONSENT = "📋 Последние согласия"
+ADMIN_BTN_CONSENT_CSV = "📎 CSV согласий"
 ADMIN_BTN_USER_FIND = "🔎 Найти пользователя"
 ADMIN_BTN_USER_VIP_ON = "🔑 Выдать VIP"
 ADMIN_BTN_USER_VIP_OFF = "🔓 Снять VIP"
@@ -498,8 +502,12 @@ ADMIN_MENU_VIP = (
 )
 ADMIN_MENU_AUDIT = (
     "<b>Журнал действий</b> — выдача и снятие VIP, ограничения, импорт и добавление кодов.\n"
-    "Хранение: 365 дней, не более 20 000 записей."
+    "Хранение: 365 дней, не более 20 000 записей.\n\n"
+    "<b>Журнал согласий</b> — принятие ПДн и opt-in/opt-out рассылки с источником и версией политики.\n"
+    "Хранение: 365 дней, не более 50 000 записей."
 )
+ADMIN_CONSENT_EMPTY = "Журнал согласий пока пуст."
+ADMIN_CONSENT_SUMMARY = "<b>Последние согласия</b>\n{rows}"
 
 ADMIN_INBOX_EMPTY = "Inbox пуст."
 ADMIN_INBOX_SUMMARY = (
@@ -643,6 +651,7 @@ def get_admin_lists_keyboard() -> InlineKeyboardMarkup:
         ("Бот доступен", "available"),
         ("Заблокировали бота", "bot_blocked"),
         ("Без ПДн", "no_policy"),
+        ("ПДн принято", "with_policy"),
         ("Есть согласие", "marketing_opt_in"),
         ("Готовы к рассылке", "marketing_ready"),
         ("VIP-доступ", "vip_access"),
@@ -734,6 +743,8 @@ def get_admin_audit_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(ADMIN_BTN_AUDIT, callback_data=CB_ADMIN_AUDIT)],
             [InlineKeyboardButton(ADMIN_BTN_AUDIT_CSV, callback_data=CB_ADMIN_AUDIT_CSV)],
+            [InlineKeyboardButton(ADMIN_BTN_CONSENT, callback_data=CB_ADMIN_CONSENT)],
+            [InlineKeyboardButton(ADMIN_BTN_CONSENT_CSV, callback_data=CB_ADMIN_CONSENT_CSV)],
             [InlineKeyboardButton(ADMIN_BTN_BACK, callback_data=CB_ADMIN_HOME)],
         ]
     )

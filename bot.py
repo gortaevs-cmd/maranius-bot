@@ -32,6 +32,7 @@ from integrations import (
     admin_audit,
     admin_alerts,
     analytics,
+    consent_log,
     daily_practice,
     dice_content,
     ewasml_services,
@@ -109,6 +110,7 @@ USERS_FILE = os.path.join(BASE_DIR, "users.json")
 ADMINS_FILE = os.path.join(BASE_DIR, "admins.json")
 VIP_NOTIFY_FILE = os.path.join(BASE_DIR, "data", "vip", "admin_notify.json")
 ADMIN_AUDIT_FILE = Path(BASE_DIR) / "admin_audit.json"
+CONSENT_LOG_FILE = Path(BASE_DIR) / "consent_log.json"
 # users_lock живёт в integrations/user_registry.py, чтобы быть рядом с данными.
 _users_lock = user_registry.users_lock
 _admins_lock = asyncio.Lock()
@@ -169,14 +171,18 @@ def _format_local_time(utc_time: datetime, timezone_str: Optional[str] = None) -
     return utc_time.strftime("%d.%m.%Y %H:%M (UTC)")
 
 
-async def ensure_user_saved(update: Update, *, bot=None) -> bool:
+async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) -> bool:
     """
     Обновить/добавить данные пользователя в users.json.
     Returns True если пользователь новый (первый визит).
+    Без force профиль не пишется до принятия актуальной политики (кроме seed-admin).
     """
     user = update.effective_user
     if not user:
         return False
+    if not force and user.id not in SEED_ADMIN_IDS:
+        if not user_registry.has_current_policy(_load_users(), user.id):
+            return False
     uid = str(user.id)
     # После принятия политики уже может быть минимальная запись {id, policy_*}.
     # Новым считаем профиль, которому ещё не задавали first_seen.
@@ -502,9 +508,9 @@ def _format_moon_text() -> str:
 
 async def moon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Команда /moon или inline «Ещё → Луна»."""
-    await ensure_user_saved(update)
     if not await _require_access(update, context, "moon"):
         return
+    await ensure_user_saved(update, bot=context.bot)
     message = update.effective_message
     if not message:
         return
@@ -573,17 +579,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not message:
         return
 
+    if getattr(context, "args", None):
+        payload = " ".join(context.args).strip()
+        if payload:
+            async with _users_lock:
+                users = _load_users()
+                user_registry.capture_start_param(users, user.id, payload)
+                _save_users(users)
+
     # До согласия не сохраняем Telegram-профиль нового пользователя.
     # Seed-админ — внутренний служебный аккаунт.
     if user.id not in SEED_ADMIN_IDS:
         async with _users_lock:
-            has_policy = user_registry.has_policy(_load_users(), user.id)
+            has_policy = user_registry.has_current_policy(_load_users(), user.id)
         if not has_policy:
             context.user_data["pending_action"] = "start"
             await consent_handlers.show_policy_gate(update, context)
             return
 
-    await ensure_user_saved(update, bot=context.bot)
+    await ensure_user_saved(update, bot=context.bot, force=user.id in SEED_ADMIN_IDS)
     async with _users_lock:
         users = _load_users()
         if users.get(str(user.id), {}).get("bot_status") == "blocked":
@@ -631,7 +645,7 @@ async def god_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or user.id not in SEED_ADMIN_IDS:
         await _open_god_panel(update)
         return
-    await ensure_user_saved(update)
+    await ensure_user_saved(update, force=True)
     await _open_god_panel(update)
 
 
@@ -902,14 +916,13 @@ async def show_vip_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def show_vip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
     await show_vip_home(update, context)
 
 
 async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
     if not await _require_access(update, context, "today"):
         return
+    await ensure_user_saved(update, bot=context.bot)
     _clear_vip_awaiting(context)
     await _reply_screen(
         update,
@@ -919,9 +932,9 @@ async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def show_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
     if not await _require_access(update, context, "store"):
         return
+    await ensure_user_saved(update, bot=context.bot)
     _clear_vip_awaiting(context)
     await _reply_screen(
         update,
@@ -932,15 +945,17 @@ async def show_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def show_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
     if not await _require_access(update, context, "more"):
         return
+    await ensure_user_saved(update, bot=context.bot)
     _clear_vip_awaiting(context)
     await _reply_screen(update, ui.MSG_MORE, inline_markup=ui.get_more_inline_keyboard())
 
 
-async def show_contact(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
+async def show_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_access(update, context, "contact"):
+        return
+    await ensure_user_saved(update, bot=context.bot)
     await _reply_screen(
         update,
         ui.MSG_CONTACT,
@@ -949,8 +964,10 @@ async def show_contact(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-async def show_services(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
+async def show_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_access(update, context, "services"):
+        return
+    await ensure_user_saved(update, bot=context.bot)
     await _reply_screen(
         update,
         ui.MSG_SERVICES,
@@ -958,21 +975,24 @@ async def show_services(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
-async def show_learning(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
+async def show_learning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_access(update, context, "learning"):
+        return
+    await ensure_user_saved(update, bot=context.bot)
     await _reply_screen(update, ui.MSG_LEARNING)
 
 
-async def show_info(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
+async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_access(update, context, "info"):
+        return
+    await ensure_user_saved(update, bot=context.bot)
     await _reply_screen(update, ui.MSG_INFO_FAQ)
 
 
 async def show_policy(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_saved(update)
     users = _load_users()
     user = update.effective_user
-    with_marketing = bool(user and user_registry.has_policy(users, user.id))
+    with_marketing = bool(user and user_registry.has_current_policy(users, user.id))
     message = update.effective_message
     if not message:
         return
@@ -1219,9 +1239,9 @@ async def _weather_fetch_and_send(update: Update, user_data: Dict[str, Any]) -> 
 
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ещё → Погода: всегда новое сообщение, прогноз без inline-кнопок."""
-    await ensure_user_saved(update)
     if not await _require_access(update, context, "weather"):
         return
+    await ensure_user_saved(update, bot=context.bot)
     message = update.effective_message
     user = update.effective_user
     if not message or not user:
@@ -1263,7 +1283,7 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not await _require_access(update, context, "weather"):
         return
-    await ensure_user_saved(update)
+    await ensure_user_saved(update, bot=context.bot)
 
     user = update.effective_user
     if not user:
@@ -1320,6 +1340,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not await _require_access(update, context, "angel"):
         return
     context.user_data.pop("pending_angel_key", None)
+    await ensure_user_saved(update, bot=context.bot)
     meaning, normalized = ewasml_services.lookup_angelic_sign(key)
     if meaning:
         display = normalized if normalized != key.strip() else key.strip()
@@ -1850,6 +1871,52 @@ async def admin_audit_export(update: Update) -> None:
     )
 
 
+def _admin_consent_row(entry: Dict[str, Any]) -> str:
+    events = {
+        "policy_accepted": "ПДн принято",
+        "marketing_opt_in": "рассылка: да",
+        "marketing_opt_out": "рассылка: нет",
+    }
+    event = events.get(str(entry.get("event")), str(entry.get("event") or "согласие"))
+    source = str(entry.get("source") or "—")
+    version = str(entry.get("policy_version") or "—")
+    return (
+        f"• <code>{html.escape(str(entry.get('created_at') or ''))}</code> — "
+        f"user <code>{html.escape(str(entry.get('user_id') or ''))}</code>: "
+        f"{html.escape(event)}; источник: {html.escape(source)}; "
+        f"версия: {html.escape(version)}"
+    )
+
+
+async def admin_consent_summary(update: Update) -> None:
+    message = update.effective_message
+    if not message or not await _admin_guard(update):
+        return
+    entries = await consent_log.recent(CONSENT_LOG_FILE, limit=10)
+    if not entries:
+        await message.reply_text(ui.ADMIN_CONSENT_EMPTY, reply_markup=ui.get_admin_audit_keyboard())
+        return
+    await message.reply_text(
+        ui.ADMIN_CONSENT_SUMMARY.format(rows="\n".join(_admin_consent_row(entry) for entry in entries)),
+        parse_mode="HTML",
+        reply_markup=ui.get_admin_audit_keyboard(),
+    )
+
+
+async def admin_consent_export(update: Update) -> None:
+    message = update.effective_message
+    if not message or not await _admin_guard(update):
+        return
+    data = await consent_log.export_csv_bytes(CONSENT_LOG_FILE)
+    import io
+
+    await message.reply_document(
+        document=InputFile(io.BytesIO(data), filename="consent_log.csv"),
+        caption="Журнал согласий",
+        reply_markup=ui.get_admin_audit_keyboard(),
+    )
+
+
 async def admin_users_summary(update: Update) -> None:
     message = update.effective_message
     if not message or not await _admin_guard(update):
@@ -1957,6 +2024,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if data == ui.CB_ADMIN_AUDIT_CSV:
         await admin_audit_export(update)
+        return
+    if data == ui.CB_ADMIN_CONSENT:
+        await admin_consent_summary(update)
+        return
+    if data == ui.CB_ADMIN_CONSENT_CSV:
+        await admin_consent_export(update)
         return
     if data == ui.CB_ADMIN_USER_FIND:
         _clear_admin_input_mode(context)
@@ -2219,7 +2292,7 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if data == ui.CB_POLICY:
         user = query.from_user
         users = _load_users()
-        with_marketing = bool(user and user_registry.has_policy(users, user.id))
+        with_marketing = bool(user and user_registry.has_current_policy(users, user.id))
         await _edit_or_reply(
             msg,
             ui.MSG_POLICY_FULL,
@@ -2392,6 +2465,12 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 users = _load_users()
                 user_registry.set_marketing_opt_in(users, user.id, False)
                 _save_users(users)
+            await consent_log.append(
+                user_id=user.id,
+                event="marketing_opt_out",
+                value=False,
+                source="unsub_button",
+            )
             if query.message:
                 await query.message.reply_text(
                     ui.MSG_MARKETING_OFF,
@@ -2413,8 +2492,6 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка текстовых сообщений и кнопок главного меню."""
-    await ensure_user_saved(update)
-
     user = update.effective_user
     if not user or not update.message:
         return
@@ -2441,12 +2518,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if user_registry.is_admin_blocked(users, user.id):
                 await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return
-            if not user_registry.has_policy(users, user.id):
+            if not user_registry.has_current_policy(users, user.id):
                 context.user_data["pending_action"] = "marketing_subscribe"
                 await consent_handlers.show_policy_gate(update, context)
                 return
             user_registry.set_marketing_opt_in(users, user.id, True)
             _save_users(users)
+        await consent_log.append(
+            user_id=user.id,
+            event="marketing_opt_in",
+            value=True,
+            source="main_menu",
+        )
+        await ensure_user_saved(update, bot=context.bot)
         await update.message.reply_text(
             ui.MSG_MARKETING_ON,
             parse_mode="HTML",
@@ -2532,6 +2616,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not await _require_access(update, context, "unknown"):
         return
+
+    await ensure_user_saved(update, bot=context.bot)
 
     entry = await inbox_mod.add_entry(
         entry_type="unknown_command",

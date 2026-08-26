@@ -39,9 +39,24 @@
 | `blocked_at`, `unsubscribed_at`, `resubscribed_at` | ISO | реализовано |
 | `admin_blocked`, `admin_blocked_at` | bool, ISO | реализовано |
 | `is_internal` | bool — тест/seed, исключать из рассылок и «чистой» статистики | реализовано |
-| `tags` | list[str] | идея |
+| `marketing_opt_out_at` | ISO — отказ от рассылки (дата подписки не перезаписывается) | реализовано |
+| `start_param`, `start_param_at` | str, ISO — deep-link `/start`, пишется один раз | реализовано |
 
 **Политика (URL):** общая для ботов Maranius — [Политика](https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-08-03), [Согласие](https://telegra.ph/SOGLASIE-NA-OBRABOTKU-PERSONALNYH-DANNYH-05-31-2).
+
+---
+
+## `consent_log.json`
+
+**Статус:** реализовано (`integrations/consent_log.py`); в production лежит в `/app/.runtime`.
+
+Append-only журнал согласий. Запись: `id`, `created_at`, `user_id`, `event`
+(`policy_accepted`, `marketing_opt_in`, `marketing_opt_out`), `value`, `policy_version`,
+`source` (`gate`, `marketing_offer`, `profile`, `main_menu`, `unsub_button`), `meta`.
+
+Retention: **365 дней**, максимум **50 000** записей. Текущие поля в `users.json` — кэш
+для сегментов; юридически значимая история — в этом журнале. В `/god → Журнал действий`:
+последние 10 записей и CSV-выгрузка.
 
 ---
 
@@ -144,9 +159,10 @@ Retention: **365 дней**, максимум **20 000 записей**. Дос�
 |---------|----------|
 | `available` | бот не заблокирован пользователем (`bot_status != blocked`) |
 | `bot_blocked` | пользователь заблокировал бот (`bot_status == blocked`) |
-| `no_policy` | нет `policy_accepted_at` |
+| `no_policy` | нет `policy_accepted_at` или устаревший `policy_version` |
+| `with_policy` | актуальная политика принята |
 | `marketing_opt_in` | есть согласие на маркетинговые сообщения |
-| `marketing_ready` | согласие и политика есть, бот доступен, нет ручного стоп-листа и `is_internal` |
+| `marketing_ready` | согласие и актуальная политика, бот доступен, нет ручного стоп-листа и `is_internal` |
 | `vip_access` | `vip == true`, то есть доступ, а не подтверждённая покупка |
 | `active_7` / `active_30` | `last_seen` ≤ 7 / 30 дней |
 | `sleeping` | `last_seen` > 30 дней |
@@ -164,4 +180,4 @@ Retention: **365 дней**, максимум **20 000 записей**. Дос�
 | 2026-04-03 | Первичное описание существующих JSON и плановых полей |
 | 2026-08-15 | users: согласия, bot_status, inbox, analytics, сегменты, zenclass stub |
 | 2026-08-15 | Убраны Zenclass-поля и индексы; API-эндпоинты SmartBotPro удалены; fastapi/uvicorn убраны из зависимостей |
-| 2026-08-26 | безопасный сегмент `marketing_ready`, аудит `/god`, подтверждение пакетных VIP-операций |
+| 2026-08-26 | consent_log, marketing_opt_out_at, start_param, re-consent по policy_version, расширенный CSV; tags убран |

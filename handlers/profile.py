@@ -6,7 +6,7 @@ import html
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from integrations import user_registry
+from integrations import consent_log, user_registry
 import ui
 
 
@@ -96,8 +96,15 @@ async def set_marketing_opt_in(
     save_users: Callable[[Dict[str, Any]], None],
     user_id: int,
     value: bool,
+    source: str = "profile",
 ) -> None:
     async with users_lock:
         users = load_users()
         user_registry.set_marketing_opt_in(users, user_id, value)
         save_users(users)
+    await consent_log.append(
+        user_id=user_id,
+        event="marketing_opt_in" if value else "marketing_opt_out",
+        value=value,
+        source=source,
+    )

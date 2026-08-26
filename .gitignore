@@ -5,6 +5,7 @@
 users.json
 admins.json
 admin_audit.json
+consent_log.json
 events.json
 monitored_chats.json
 data/platform_users.json

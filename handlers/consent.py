@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, Optional, Set
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from integrations import analytics, user_registry
+from integrations import analytics, consent_log, user_registry
 import ui
 
 AccessFn = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[Any]]
@@ -68,6 +68,25 @@ async def show_marketing_offer(update: Update) -> None:
     )
 
 
+async def _log_policy(user_id: int, *, source: str) -> None:
+    await consent_log.append(
+        user_id=user_id,
+        event="policy_accepted",
+        value=True,
+        policy_version=user_registry.POLICY_VERSION,
+        source=source,
+    )
+
+
+async def _log_marketing(user_id: int, value: bool, *, source: str) -> None:
+    await consent_log.append(
+        user_id=user_id,
+        event="marketing_opt_in" if value else "marketing_opt_out",
+        value=value,
+        source=source,
+    )
+
+
 async def after_policy_accepted(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -87,6 +106,7 @@ async def after_policy_accepted(
         if not shown:
             user_registry.mark_marketing_offer_shown(users, user.id)
             save_users(users)
+    await _log_policy(user.id, source="gate")
     if not shown:
         await show_marketing_offer(update)
         return
@@ -144,6 +164,7 @@ async def consent_callback(
             if not shown:
                 user_registry.mark_marketing_offer_shown(users, user.id)
             save_users(users)
+        await _log_policy(user.id, source="gate")
         if not shown:
             await query.message.reply_text(
                 ui.MSG_MARKETING_OFFER,
@@ -166,6 +187,7 @@ async def consent_callback(
             users = load_users()
             user_registry.set_marketing_opt_in(users, user.id, opt_in)
             save_users(users)
+        await _log_marketing(user.id, opt_in, source="marketing_offer")
         pending = context.user_data.pop("pending_action", None)
         if pending:
             return pending
@@ -182,6 +204,7 @@ async def consent_callback(
             users = load_users()
             user_registry.set_marketing_opt_in(users, user.id, True)
             save_users(users)
+        await _log_marketing(user.id, True, source="profile")
         await query.message.reply_text(
             ui.MSG_MARKETING_ON,
             parse_mode="HTML",
@@ -194,6 +217,7 @@ async def consent_callback(
             users = load_users()
             user_registry.set_marketing_opt_in(users, user.id, False)
             save_users(users)
+        await _log_marketing(user.id, False, source="profile")
         await query.message.reply_text(
             ui.MSG_MARKETING_OFF,
             parse_mode="HTML",
@@ -228,7 +252,7 @@ async def require_user_access(
         if user_registry.is_admin_blocked(users, user.id):
             await reply_restricted(update)
             return False
-        if not user_registry.has_policy(users, user.id):
+        if not user_registry.has_current_policy(users, user.id):
             context.user_data["pending_action"] = action_key
             await show_policy_gate(update, context)
             return False
