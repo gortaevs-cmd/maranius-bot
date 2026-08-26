@@ -192,7 +192,8 @@ MSG_MORE = (
     "🙌 <b>Услуги</b> — целительские практики, их описания и запись на сессию.\n"
     "🎓 <b>Курсы/Практики</b> — онлайн-программы и практики с кристаллами Крайона.\n"
     "ℹ️ <b>Инфо / FAQ</b> — как пользоваться ботом и ответы на частые вопросы.\n"
-    "🛡 <b>Политика</b> — документы об обработке персональных данных.\n\n"
+    "🛡 <b>Политика</b> — документы об обработке персональных данных.\n"
+    "⚙️ <b>Настройки профиля</b> — статус подписок и управление рассылкой.\n\n"
     "Выберите нужный раздел ниже 👇"
 )
 
@@ -283,6 +284,24 @@ MSG_MARKETING_OFFER = (
 MSG_MARKETING_ON = "Вы подписаны на новости и анонсы."
 MSG_MARKETING_OFF = "Рассылку отключили. Сервисные сообщения по-прежнему возможны."
 
+MSG_PROFILE_MENU = (
+    "<b>⚙️ Настройки профиля</b>\n\n"
+    "Здесь можно посмотреть активные подписки и управлять рассылкой новостей."
+)
+MSG_PROFILE_SUBS_ON = (
+    "<b>📬 Подписки</b>\n\n"
+    "Вы подписаны на новости и анонсы Maranius в Telegram.\n"
+    "Сервисные сообщения (VIP, ответы) приходят отдельно от рассылки."
+)
+MSG_PROFILE_SUBS_OFF = (
+    "<b>📬 Подписки</b>\n\n"
+    "Вы не подписаны на новости и анонсы.\n"
+    "Сервисные сообщения (VIP, ответы) по-прежнему возможны без рассылки."
+)
+
+BTN_PROFILE_STATUS = "📋 Статус"
+BTN_PROFILE_SUBS = "📬 Подписки"
+
 CB_POLICY_ACCEPT = "consent:policy:accept"
 CB_MARKETING_YES = "consent:marketing:yes"
 CB_MARKETING_NO = "consent:marketing:no"
@@ -308,6 +327,11 @@ CB_CRYSTAL_PULL = "today:card:crystal"
 
 # Inline «Ещё»
 CB_MORE_HOME = "more:home"
+CB_MORE_PROFILE = "more:profile"
+CB_PROFILE_STATUS = "more:profile:status"
+CB_PROFILE_SUBS = "more:profile:subs"
+CB_PROFILE_SUB_ON = "more:profile:sub:on"
+CB_PROFILE_SUB_OFF = "more:profile:sub:off"
 CB_WEATHER = "more:weather"
 CB_MOON = "more:moon"
 CB_SERVICES = "more:services"
@@ -699,13 +723,16 @@ def get_bot_commands() -> list[BotCommand]:
     ]
 
 
-def get_main_keyboard() -> ReplyKeyboardMarkup:
+def get_main_keyboard(*, show_marketing_subscribe: bool = False) -> ReplyKeyboardMarkup:
     """Постоянная нижняя навигация стенда Maranius."""
+    rows = [
+        [KeyboardButton(BTN_TODAY), KeyboardButton(BTN_VIP)],
+        [KeyboardButton(BTN_STORE), KeyboardButton(BTN_MORE)],
+    ]
+    if show_marketing_subscribe:
+        rows.append([KeyboardButton(BTN_MARKETING_ON)])
     return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton(BTN_TODAY), KeyboardButton(BTN_VIP)],
-            [KeyboardButton(BTN_STORE), KeyboardButton(BTN_MORE)],
-        ],
+        rows,
         resize_keyboard=True,
         one_time_keyboard=False,
     )
@@ -755,7 +782,37 @@ def get_more_inline_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Инфо / FAQ", callback_data=CB_INFO),
                 InlineKeyboardButton("Политика", callback_data=CB_POLICY),
             ],
+            [InlineKeyboardButton("⚙️ Настройки профиля", callback_data=CB_MORE_PROFILE)],
         ]
+    )
+
+
+def get_profile_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_PROFILE_STATUS, callback_data=CB_PROFILE_STATUS)],
+            [InlineKeyboardButton(BTN_PROFILE_SUBS, callback_data=CB_PROFILE_SUBS)],
+            [InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_HOME)],
+        ]
+    )
+
+
+def get_profile_subs_keyboard(*, marketing_opt_in: bool) -> InlineKeyboardMarkup:
+    if marketing_opt_in:
+        toggle = InlineKeyboardButton(BTN_MARKETING_OFF, callback_data=CB_PROFILE_SUB_OFF)
+    else:
+        toggle = InlineKeyboardButton(BTN_MARKETING_ON, callback_data=CB_PROFILE_SUB_ON)
+    return InlineKeyboardMarkup(
+        [
+            [toggle],
+            [InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_PROFILE)],
+        ]
+    )
+
+
+def get_profile_status_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_PROFILE)]]
     )
 
 

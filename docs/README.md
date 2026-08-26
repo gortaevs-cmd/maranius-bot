@@ -21,6 +21,7 @@
 |------|------------|
 | [REGISTRY.md](./REGISTRY.md) | Реестр команд, кнопок, callback, переменных `.env`, файлов данных, статусы план/готово |
 | [DATA_REGISTRY.md](./DATA_REGISTRY.md) | Поля JSON (`users`, `platform_users`, планируемые заказы/заявки) |
+| [CRM_АНАЛИТИКА_И_РАССЫЛКИ.md](./CRM_АНАЛИТИКА_И_РАССЫЛКИ.md) | Целевая база клиентов, VIP-сегментация, кампании, Twenty/n8n и backup-политика |
 | [ИНТЕРФЕЙС_МЕНЮ_И_КОМАНДЫ.md](./ИНТЕРФЕЙС_МЕНЮ_И_КОМАНДЫ.md) | Меню Telegram и команды |
 | [smartbot/](./smartbot/) | Исторические выгрузки SmartBot Pro: EWASMLBOT, KryonCrystalsBot (JSON + памятки) |
 | [SMARTBOT_SCENARIO_ПАМЯТКА.md](./SMARTBOT_SCENARIO_ПАМЯТКА.md) | Старая памятка EWASML; актуальная — [smartbot/EWASMLBOT_ПАМЯТКА.md](./smartbot/EWASMLBOT_ПАМЯТКА.md) |

@@ -381,3 +381,47 @@ def stats_summary(users: Dict[str, Any]) -> Dict[str, int]:
             if d > 30:
                 out["sleeping"] += 1
     return out
+
+
+VIP_SOURCE_LABELS: Dict[str, str] = {
+    "code": "активирован VIP-код",
+    "admin_grant": "выдан администратором",
+    "import": "импортирован из списка",
+    "seed_admin": "служебный доступ",
+}
+
+
+def vip_source_label(source: Optional[str]) -> str:
+    if not source:
+        return "не указан"
+    return VIP_SOURCE_LABELS.get(str(source), str(source))
+
+
+def show_marketing_subscribe_in_main_menu(
+    users: Dict[str, Any],
+    user_id: int,
+    *,
+    seed_admin_ids: Set[int],
+) -> bool:
+    """Показывать кнопку «Подписаться на рассылку» в нижнем меню."""
+    if user_id in seed_admin_ids:
+        return False
+    row = get_user(users, user_id)
+    if row.get("is_internal"):
+        return False
+    if not has_policy(users, user_id):
+        return False
+    return not bool(row.get("marketing_opt_in"))
+
+
+def main_reply_keyboard(
+    users: Dict[str, Any],
+    user_id: int,
+    *,
+    seed_admin_ids: Set[int],
+):
+    """Reply-клавиатура с учётом статуса рассылки пользователя."""
+    import ui as ui_mod
+
+    show = show_marketing_subscribe_in_main_menu(users, user_id, seed_admin_ids=seed_admin_ids)
+    return ui_mod.get_main_keyboard(show_marketing_subscribe=show)

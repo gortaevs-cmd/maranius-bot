@@ -30,6 +30,8 @@ class BotCommandsTests(unittest.TestCase):
             ui.get_admin_vip_keyboard(), ui.get_today_inline_keyboard(),
             ui.get_card_hub_keyboard(), ui.get_card_hub_back_keyboard(),
             ui.get_more_inline_keyboard(), vip_content.deck_menu_keyboard(),
+            ui.get_profile_menu_keyboard(), ui.get_profile_subs_keyboard(marketing_opt_in=False),
+            ui.get_profile_status_back_keyboard(),
         ]
         callbacks = {
             button.callback_data

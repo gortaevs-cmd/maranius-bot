@@ -18,6 +18,12 @@ import ui
 ADMIN_NOTIFY_COOLDOWN_SEC = 300
 
 
+def _reply_keyboard(user_id: int, main_keyboard_for: Optional[Callable[[int], Any]] = None):
+    if main_keyboard_for:
+        return main_keyboard_for(user_id)
+    return ui.get_main_keyboard()
+
+
 async def load_vip_notify(path: str) -> Dict[str, str]:
     data = load_json(path, {})
     if not isinstance(data, dict):
@@ -106,6 +112,7 @@ async def try_vip_code(
     notify_wrong: Callable[..., Any],
     notify_duplicate: Optional[Callable[..., Any]] = None,
     protect_kwargs: Dict[str, Any],
+    main_keyboard_for: Optional[Callable[[int], Any]] = None,
 ) -> bool:
     user = update.effective_user
     if not user or not update.message:
@@ -131,7 +138,7 @@ async def try_vip_code(
         await update.message.reply_text(
             ui.MSG_VIP_CODE_OK,
             parse_mode="HTML",
-            reply_markup=ui.get_main_keyboard(),
+            reply_markup=_reply_keyboard(user.id, main_keyboard_for),
         )
         await show_vip_home(update, context)
         return True
@@ -141,7 +148,7 @@ async def try_vip_code(
         await update.message.reply_text(
             ui.MSG_VIP_CODE_INVALID,
             parse_mode="HTML",
-            reply_markup=ui.get_main_keyboard(),
+            reply_markup=_reply_keyboard(user.id, main_keyboard_for),
             **protect_kwargs,
         )
         owner = vip_codes.find_used_code_owner(raw_code)
@@ -167,7 +174,7 @@ async def try_vip_code(
     await update.message.reply_text(
         ui.MSG_VIP_CODE_INVALID,
         parse_mode="HTML",
-        reply_markup=ui.get_main_keyboard(),
+        reply_markup=_reply_keyboard(user.id, main_keyboard_for),
         **protect_kwargs,
     )
     await notify_wrong(
@@ -342,6 +349,7 @@ async def vip_approve_callback(
     *,
     admin_guard: Callable[[Update], Any],
     grant_vip: Callable[[int], Any],
+    main_keyboard_for: Optional[Callable[[int], Any]] = None,
 ) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -361,7 +369,7 @@ async def vip_approve_callback(
                 chat_id=target_id,
                 text=ui.MSG_VIP_APPROVE_USER,
                 parse_mode="HTML",
-                reply_markup=ui.get_main_keyboard(),
+                reply_markup=_reply_keyboard(target_id, main_keyboard_for),
             )
         except Exception as exc:
             print(f"VIP approve notify {target_id}: {exc!r}")
@@ -382,7 +390,7 @@ async def vip_approve_callback(
                 chat_id=target_id,
                 text=ui.MSG_VIP_REJECT_USER,
                 parse_mode="HTML",
-                reply_markup=ui.get_main_keyboard(),
+                reply_markup=_reply_keyboard(target_id, main_keyboard_for),
             )
         except Exception as exc:
             print(f"VIP reject notify {target_id}: {exc!r}")

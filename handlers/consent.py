@@ -13,6 +13,12 @@ import ui
 AccessFn = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[Any]]
 
 
+def _main_kb(users: dict, user_id: int, seed_admin_ids: Optional[Set[int]]):
+    if not seed_admin_ids:
+        return ui.get_main_keyboard()
+    return user_registry.main_reply_keyboard(users, user_id, seed_admin_ids=seed_admin_ids)
+
+
 def is_restricted(update: Update, users: dict) -> bool:
     user = update.effective_user
     if not user:
@@ -89,10 +95,21 @@ async def after_policy_accepted(
         await message_reply_continue(update)
 
 
-async def message_reply_continue(update: Update) -> None:
+async def message_reply_continue(
+    update: Update,
+    *,
+    users: dict,
+    user_id: int,
+    seed_admin_ids: set[int],
+) -> None:
     message = update.effective_message
     if message:
-        await message.reply_text(ui.MSG_POLICY_CONTINUE, reply_markup=ui.get_main_keyboard())
+        await message.reply_text(
+            ui.MSG_POLICY_CONTINUE,
+            reply_markup=user_registry.main_reply_keyboard(
+                users, user_id, seed_admin_ids=seed_admin_ids
+            ),
+        )
 
 
 async def consent_callback(
@@ -102,6 +119,7 @@ async def consent_callback(
     users_lock,
     load_users: Callable[[], dict],
     save_users: Callable[[dict], None],
+    seed_admin_ids: Optional[Set[int]] = None,
 ) -> Optional[str]:
     """
     Обработка callback согласий. Returns pending_action если нужно продолжить действие.
@@ -138,7 +156,7 @@ async def consent_callback(
         await query.message.reply_text(
             ui.MSG_POLICY_ACCEPTED,
             parse_mode="HTML",
-            reply_markup=ui.get_main_keyboard(),
+            reply_markup=_main_kb(users, user.id, seed_admin_ids),
         )
         return context.user_data.pop("pending_action", None)
 
@@ -152,7 +170,11 @@ async def consent_callback(
         if pending:
             return pending
         text = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
-        await query.message.reply_text(text, parse_mode="HTML", reply_markup=ui.get_main_keyboard())
+        await query.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=_main_kb(users, user.id, seed_admin_ids),
+        )
         return None
 
     if data == ui.CB_MARKETING_TOGGLE_ON:
@@ -160,7 +182,11 @@ async def consent_callback(
             users = load_users()
             user_registry.set_marketing_opt_in(users, user.id, True)
             save_users(users)
-        await query.message.reply_text(ui.MSG_MARKETING_ON, parse_mode="HTML")
+        await query.message.reply_text(
+            ui.MSG_MARKETING_ON,
+            parse_mode="HTML",
+            reply_markup=_main_kb(users, user.id, seed_admin_ids),
+        )
         return None
 
     if data == ui.CB_MARKETING_TOGGLE_OFF:
@@ -168,7 +194,11 @@ async def consent_callback(
             users = load_users()
             user_registry.set_marketing_opt_in(users, user.id, False)
             save_users(users)
-        await query.message.reply_text(ui.MSG_MARKETING_OFF, parse_mode="HTML")
+        await query.message.reply_text(
+            ui.MSG_MARKETING_OFF,
+            parse_mode="HTML",
+            reply_markup=_main_kb(users, user.id, seed_admin_ids),
+        )
         return None
 
     return None

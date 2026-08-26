@@ -50,10 +50,18 @@ from events import storage as events_storage
 
 import ui
 from handlers import consent as consent_handlers
+from handlers import profile as profile_handlers
 from handlers import vip as vip_handlers
 
 # Суперюзеры стенда — режим бога и VIP навсегда без кода в чат.
 SEED_ADMIN_IDS: Set[int] = {186758977}
+
+
+def _main_keyboard_for(user_id: int):
+    """Нижнее меню с кнопкой рассылки, если пользователь не подписан."""
+    return user_registry.main_reply_keyboard(
+        _load_users(), user_id, seed_admin_ids=SEED_ADMIN_IDS
+    )
 
 
 def _env_strip(name: str) -> Optional[str]:
@@ -505,7 +513,9 @@ async def moon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text(
         text,
         parse_mode="HTML",
-        reply_markup=ui.get_main_keyboard(),
+        reply_markup=_main_keyboard_for(update.effective_user.id)
+        if update.effective_user
+        else ui.get_main_keyboard(),
     )
 
 
@@ -587,7 +597,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     await message.reply_text(
         ui.START_MESSAGE,
-        reply_markup=ui.get_main_keyboard(),
+        reply_markup=_main_keyboard_for(user.id),
     )
 
 
@@ -835,10 +845,11 @@ async def _reply_screen(
             **extra,
         )
     else:
+        uid = update.effective_user.id if update.effective_user else 0
         await message.reply_text(
             text,
             parse_mode=parse_mode,
-            reply_markup=ui.get_main_keyboard(),
+            reply_markup=_main_keyboard_for(uid) if uid else ui.get_main_keyboard(),
             disable_web_page_preview=disable_web_page_preview,
             **extra,
         )
@@ -1184,7 +1195,7 @@ async def _weather_fetch_and_send(update: Update, user_data: Dict[str, Any]) -> 
         user_data.get("timezone"),
         fetched_at=datetime.utcnow(),
     )
-    main_kb = ui.get_main_keyboard()
+    main_kb = _main_keyboard_for(user.id)
     if not text:
         await message.reply_text(ui.MSG_WEATHER_FETCH_FAIL, reply_markup=main_kb)
         return
@@ -1204,7 +1215,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     uid = str(user.id)
     user_data = _load_users().get(uid, {})
-    main_kb = ui.get_main_keyboard()
+    main_kb = _main_keyboard_for(user.id)
 
     if "last_location" not in user_data:
         await _weather_ask_location(message)
@@ -1246,7 +1257,7 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     uid = str(user.id)
     user_data = _load_users().get(uid, {})
-    main_kb = ui.get_main_keyboard()
+    main_kb = _main_keyboard_for(user.id)
 
     try:
         lat = update.message.location.latitude
@@ -1303,7 +1314,9 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
             text,
             parse_mode="HTML",
             disable_web_page_preview=True,
-            reply_markup=ui.get_main_keyboard(),
+            reply_markup=_main_keyboard_for(update.effective_user.id)
+            if update.effective_user
+            else ui.get_main_keyboard(),
             **PROTECT_KWARGS,
         )
         return
@@ -1330,7 +1343,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await update.message.reply_text(
         ui.MSG_ANGEL_NOT_FOUND.format(sign=key.strip()),
         parse_mode="HTML",
-        reply_markup=ui.get_main_keyboard(),
+        reply_markup=_main_keyboard_for(user.id) if user else ui.get_main_keyboard(),
         **PROTECT_KWARGS,
     )
 
@@ -1440,7 +1453,7 @@ async def _admin_exec_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 chat_id=uid,
                 text=ui.MSG_VIP_APPROVE_USER,
                 parse_mode="HTML",
-                reply_markup=ui.get_main_keyboard(),
+                reply_markup=_main_keyboard_for(uid),
             )
         except Exception as exc:
             print(f"VIP notify user {uid}: {exc!r}")
@@ -1638,6 +1651,7 @@ async def vip_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         context,
         admin_guard=_admin_guard,
         grant_vip=_grant,
+        main_keyboard_for=_main_keyboard_for,
     )
 
 
@@ -1733,6 +1747,61 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ui.MSG_INFO_FAQ,
             ui.get_back_to_more_keyboard(),
             disable_web_page_preview=True,
+        )
+        return
+    if data == ui.CB_MORE_PROFILE:
+        await _edit_or_reply(msg, ui.MSG_PROFILE_MENU, ui.get_profile_menu_keyboard())
+        return
+    if data == ui.CB_PROFILE_STATUS:
+        user = query.from_user
+        if not user:
+            return
+        row = user_registry.get_user(_load_users(), user.id)
+        courses = await platform_db.get_user_courses(str(user.id))
+        text = profile_handlers.format_status_html(
+            row,
+            is_vip=_user_is_vip(user.id),
+            courses=courses,
+        )
+        await _edit_or_reply(msg, text, ui.get_profile_status_back_keyboard())
+        return
+    if data == ui.CB_PROFILE_SUBS:
+        user = query.from_user
+        if not user:
+            return
+        row = user_registry.get_user(_load_users(), user.id)
+        opt_in = bool(row.get("marketing_opt_in"))
+        await _edit_or_reply(
+            msg,
+            profile_handlers.subscriptions_message(marketing_opt_in=opt_in),
+            ui.get_profile_subs_keyboard(marketing_opt_in=opt_in),
+        )
+        return
+    if data in (ui.CB_PROFILE_SUB_ON, ui.CB_PROFILE_SUB_OFF):
+        user = query.from_user
+        if not user:
+            return
+        value = data == ui.CB_PROFILE_SUB_ON
+        await profile_handlers.set_marketing_opt_in(
+            users_lock=_users_lock,
+            load_users=_load_users,
+            save_users=_save_users,
+            user_id=user.id,
+            value=value,
+        )
+        row = user_registry.get_user(_load_users(), user.id)
+        opt_in = bool(row.get("marketing_opt_in"))
+        await _edit_or_reply(
+            msg,
+            profile_handlers.subscriptions_message(marketing_opt_in=opt_in),
+            ui.get_profile_subs_keyboard(marketing_opt_in=opt_in),
+        )
+        confirm = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=confirm,
+            parse_mode="HTML",
+            reply_markup=_main_keyboard_for(user.id),
         )
         return
     if data == ui.CB_POLICY:
@@ -1871,6 +1940,17 @@ async def _continue_pending_action(
         await show_store(update, context)
     elif pending == "more":
         await show_more(update, context)
+    elif pending == "marketing_subscribe":
+        user = update.effective_user
+        if user and update.effective_message:
+            users = _load_users()
+            opt_in = bool(user_registry.get_user(users, user.id).get("marketing_opt_in"))
+            text = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
+            await update.effective_message.reply_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=_main_keyboard_for(user.id),
+            )
     elif pending == "weather":
         await weather(update, context)
     elif pending == "moon":
@@ -1882,7 +1962,11 @@ async def _continue_pending_action(
     elif pending == "unknown":
         if update.effective_message:
             await update.effective_message.reply_text(
-                ui.UNKNOWN_COMMAND_HINT, parse_mode="HTML", reply_markup=ui.get_main_keyboard()
+                ui.UNKNOWN_COMMAND_HINT,
+                parse_mode="HTML",
+                reply_markup=_main_keyboard_for(update.effective_user.id)
+                if update.effective_user
+                else ui.get_main_keyboard(),
             )
 
 
@@ -1897,7 +1981,11 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 user_registry.set_marketing_opt_in(users, user.id, False)
                 _save_users(users)
             if query.message:
-                await query.message.reply_text(ui.MSG_MARKETING_OFF, parse_mode="HTML")
+                await query.message.reply_text(
+                    ui.MSG_MARKETING_OFF,
+                    parse_mode="HTML",
+                    reply_markup=_main_keyboard_for(user.id),
+                )
         return
     pending = await consent_handlers.consent_callback(
         update,
@@ -1905,6 +1993,7 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         users_lock=_users_lock,
         load_users=_load_users,
         save_users=_save_users,
+        seed_admin_ids=SEED_ADMIN_IDS,
     )
     if pending:
         await _continue_pending_action(update, context, pending)
@@ -1933,6 +2022,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if text == ui.BTN_MORE:
         await show_more(update, context)
+        return
+    if text == ui.BTN_MARKETING_ON:
+        async with _users_lock:
+            users = _load_users()
+            if user_registry.is_admin_blocked(users, user.id):
+                await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
+                return
+            if not user_registry.has_policy(users, user.id):
+                context.user_data["pending_action"] = "marketing_subscribe"
+                await consent_handlers.show_policy_gate(update, context)
+                return
+            user_registry.set_marketing_opt_in(users, user.id, True)
+            _save_users(users)
+        await update.message.reply_text(
+            ui.MSG_MARKETING_ON,
+            parse_mode="HTML",
+            reply_markup=_main_keyboard_for(user.id),
+        )
         return
     if text.casefold() in (
         "новое место",
@@ -1997,6 +2104,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ),
         notify_duplicate=lambda ctx, **kw: _notify_duplicate_vip(ctx, **kw),
         protect_kwargs=PROTECT_KWARGS,
+        main_keyboard_for=_main_keyboard_for,
     ):
         return
 
@@ -2028,7 +2136,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(
         ui.UNKNOWN_COMMAND_HINT,
         parse_mode="HTML",
-        reply_markup=ui.get_main_keyboard(),
+        reply_markup=_main_keyboard_for(user.id),
     )
 
 
@@ -2040,7 +2148,9 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = getattr(update, "effective_message", None)
     if message:
         try:
-            await message.reply_text(ui.MSG_TECHNICAL_ERROR, reply_markup=ui.get_main_keyboard())
+            user = getattr(update, "effective_user", None)
+            kb = _main_keyboard_for(user.id) if user else ui.get_main_keyboard()
+            await message.reply_text(ui.MSG_TECHNICAL_ERROR, reply_markup=kb)
         except Exception as exc:
             print(f"Error reply failed: {exc!r}")
 
