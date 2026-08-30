@@ -50,10 +50,14 @@ async def append(
     event: str,
     value: Optional[bool] = None,
     policy_version: Optional[str] = None,
+    purpose: str = "",
+    document: str = "",
+    document_url: str = "",
+    action: str = "",
     source: str = "",
     meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Добавить запись о согласии или отзыве."""
+    """Добавить неизменяемую запись о согласии или отзыве."""
     log_path = Path(path) if path else CONSENT_LOG_FILE
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -61,6 +65,10 @@ async def append(
         "user_id": int(user_id),
         "event": str(event)[:64],
         "source": " ".join(str(source).split())[:64],
+        "purpose": " ".join(str(purpose).split())[:64],
+        "document": " ".join(str(document).split())[:64],
+        "document_url": str(document_url).strip()[:500],
+        "action": " ".join(str(action).split())[:128],
         "meta": meta or {},
     }
     if value is not None:
@@ -104,7 +112,20 @@ async def export_csv_bytes(path: Optional[Path] = None) -> bytes:
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";")
     writer.writerow(
-        ["id", "created_at", "user_id", "event", "value", "policy_version", "source", "meta_json"]
+        [
+            "id",
+            "created_at",
+            "user_id",
+            "event",
+            "value",
+            "purpose",
+            "document",
+            "policy_version",
+            "document_url",
+            "action",
+            "source",
+            "meta_json",
+        ]
     )
     for row in rows:
         value = row.get("value")
@@ -115,7 +136,11 @@ async def export_csv_bytes(path: Optional[Path] = None) -> bytes:
                 row.get("user_id", ""),
                 row.get("event", ""),
                 "" if value is None else ("1" if value else "0"),
+                row.get("purpose", ""),
+                row.get("document", ""),
                 row.get("policy_version", ""),
+                row.get("document_url", ""),
+                row.get("action", ""),
                 row.get("source", ""),
                 json.dumps(row.get("meta", {}), ensure_ascii=False),
             ]

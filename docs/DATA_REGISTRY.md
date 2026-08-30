@@ -32,17 +32,18 @@
 | `vip`, `vip_granted_at` | bool, ISO | реализовано |
 | `vip_source` | `code` \| `admin_grant` \| `import` \| `seed_admin` | реализовано |
 | `vip_revoked_at` | ISO | реализовано (при снятии VIP) |
-| `policy_accepted_at`, `policy_version` | ISO, `"2024-08-03"` | реализовано |
-| `marketing_opt_in`, `marketing_opt_in_at` | bool, ISO | реализовано |
-| `marketing_offer_shown_at` | ISO — предложение рассылки после политики | реализовано |
+| `policy_accepted_at`, `policy_version`, `personal_data_consent_action` | ISO, версия согласия на ПДн `2026-08-31-v1.0`, callback активного действия | реализовано |
+| `marketing_opt_in`, `marketing_opt_in_at` | bool, ISO — последнее положительное маркетинговое согласие | реализовано |
+| `marketing_consent_version`, `marketing_consent_action` | версия `2026-08-31-v1.0`, callback активного opt-in | реализовано |
+| `marketing_offer_shown_at`, `marketing_offer_version` | ISO, версия показанного предложения рассылки | реализовано |
 | `bot_status` | `active` \| `blocked` | реализовано (`my_chat_member`) |
 | `blocked_at`, `unsubscribed_at`, `resubscribed_at` | ISO | реализовано |
 | `admin_blocked`, `admin_blocked_at` | bool, ISO | реализовано |
 | `is_internal` | bool — тест/seed, исключать из рассылок и «чистой» статистики | реализовано |
-| `marketing_opt_out_at` | ISO — отказ от рассылки (дата подписки не перезаписывается) | реализовано |
-| `start_param`, `start_param_at` | str, ISO — deep-link `/start`, пишется один раз | реализовано |
+| `marketing_opt_out_at`, `marketing_opt_out_action` | ISO, callback — отказ от рассылки (дата подписки не перезаписывается) | реализовано |
+| `start_param`, `start_param_at` | str, ISO — deep-link `/start`, пишется один раз после согласия на ПДн | реализовано |
 
-**Политика (URL):** общая для ботов Maranius — [Политика](https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-08-03), [Согласие](https://telegra.ph/SOGLASIE-NA-OBRABOTKU-PERSONALNYH-DANNYH-05-31-2).
+**Актуальные документы `@MaraniusBOT`:** [Политика конфиденциальности](https://maranius.ru/legal/privacy-policy/), [согласие на обработку персональных данных](https://maranius.ru/legal/personal-data-consent/), [согласие на рекламные сообщения](https://maranius.ru/legal/marketing-consent/) и [Пользовательское соглашение](https://maranius.ru/legal/user-agreement/). Согласия старых версий не переводятся на новую версию задним числом.
 
 ---
 
@@ -51,8 +52,9 @@
 **Статус:** реализовано (`integrations/consent_log.py`); в production лежит в `/app/.runtime`.
 
 Append-only журнал согласий. Запись: `id`, `created_at`, `user_id`, `event`
-(`policy_accepted`, `marketing_opt_in`, `marketing_opt_out`), `value`, `policy_version`,
-`source` (`gate`, `marketing_offer`, `profile`, `main_menu`, `unsub_button`), `meta`.
+(`policy_accepted`, `marketing_opt_in`, `marketing_opt_out`), `value`, `purpose`,
+`document`, `policy_version`, `document_url`, `action`, `source`, `meta`. Так фиксируются
+назначение, редакция документа, URL и конкретное активное действие пользователя.
 
 Retention: **365 дней**, максимум **50 000** записей. Текущие поля в `users.json` — кэш
 для сегментов; юридически значимая история — в этом журнале. В `/god → Журнал действий`:
@@ -161,8 +163,8 @@ Retention: **365 дней**, максимум **20 000 записей**. Дос�
 | `bot_blocked` | пользователь заблокировал бот (`bot_status == blocked`) |
 | `no_policy` | нет `policy_accepted_at` или устаревший `policy_version` |
 | `with_policy` | актуальная политика принята |
-| `marketing_opt_in` | есть согласие на маркетинговые сообщения |
-| `marketing_ready` | согласие и актуальная политика, бот доступен, нет ручного стоп-листа и `is_internal` |
+| `marketing_opt_in` | есть отдельное согласие на маркетинговые сообщения текущей версии |
+| `marketing_ready` | отдельное маркетинговое согласие и согласие на ПДн текущих версий, бот доступен, нет ручного стоп-листа и `is_internal` |
 | `vip_access` | `vip == true`, то есть доступ, а не подтверждённая покупка |
 | `active_7` / `active_30` | `last_seen` ≤ 7 / 30 дней |
 | `sleeping` | `last_seen` > 30 дней |
@@ -181,3 +183,4 @@ Retention: **365 дней**, максимум **20 000 записей**. Дос�
 | 2026-08-15 | users: согласия, bot_status, inbox, analytics, сегменты, zenclass stub |
 | 2026-08-15 | Убраны Zenclass-поля и индексы; API-эндпоинты SmartBotPro удалены; fastapi/uvicorn убраны из зависимостей |
 | 2026-08-26 | consent_log, marketing_opt_out_at, start_param, re-consent по policy_version, расширенный CSV; tags убран |
+| 2026-08-31 | согласия и ссылки переведены на опубликованные документы maranius.ru; разделены версии ПДн и маркетинга, журнал дополнен документом и активным действием |

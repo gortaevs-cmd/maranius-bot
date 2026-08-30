@@ -19,7 +19,17 @@ USERS_FILE = Path(os.getenv("MARANIUS_RUNTIME_DIR") or _BASE) / "users.json"
 # Все операции load -> modify -> save должны выполняться под этим lock.
 users_lock = asyncio.Lock()
 
-POLICY_VERSION = "2024-08-03"
+# Версии опубликованных документов Maranius. Нельзя менять исторические записи
+# пользователей на новые версии задним числом: новая версия всегда требует нового
+# активного действия в интерфейсе бота.
+PRIVACY_POLICY_VERSION = "2026-08-31-v1.1"
+PERSONAL_DATA_CONSENT_VERSION = "2026-08-31-v1.0"
+MARKETING_CONSENT_VERSION = "2026-08-31-v1.0"
+USER_AGREEMENT_VERSION = "2026-08-31-v1.0"
+
+# Совместимое имя для существующих фильтров и полей users.json. Оно означает
+# именно версию согласия на обработку персональных данных, а не все документы.
+POLICY_VERSION = PERSONAL_DATA_CONSENT_VERSION
 MSK = pytz.timezone("Europe/Moscow")
 
 # Поля, которые merge при ensure_user_saved не затирает.
@@ -34,9 +44,13 @@ _PRESERVE_KEYS = (
     "vip_source",
     "policy_accepted_at",
     "policy_version",
+    "personal_data_consent_action",
     "marketing_opt_in",
     "marketing_opt_in_at",
+    "marketing_consent_version",
+    "marketing_consent_action",
     "marketing_offer_shown_at",
+    "marketing_offer_version",
     "bot_status",
     "blocked_at",
     "unsubscribed_at",
@@ -45,6 +59,7 @@ _PRESERVE_KEYS = (
     "admin_blocked_at",
     "is_internal",
     "marketing_opt_out_at",
+    "marketing_opt_out_action",
     "start_param",
     "start_param_at",
 )
@@ -138,23 +153,38 @@ def has_current_policy(users: Dict[str, Any], user_id: int) -> bool:
     return row.get("policy_version") == POLICY_VERSION
 
 
-def accept_policy(users: Dict[str, Any], user_id: int) -> None:
+def accept_policy(users: Dict[str, Any], user_id: int, *, action: str = "") -> None:
     uid = str(user_id)
     row = users.setdefault(uid, {"id": user_id})
     row["policy_accepted_at"] = now_iso()
     row["policy_version"] = POLICY_VERSION
+    row["personal_data_consent_action"] = str(action)[:64]
 
 
-def set_marketing_opt_in(users: Dict[str, Any], user_id: int, value: bool) -> None:
+def has_current_marketing_consent(users: Dict[str, Any], user_id: int) -> bool:
+    """Есть отдельное действующее согласие на рекламу текущей версии."""
+    row = get_user(users, user_id)
+    return bool(row.get("marketing_opt_in")) and row.get(
+        "marketing_consent_version"
+    ) == MARKETING_CONSENT_VERSION
+
+
+def set_marketing_opt_in(
+    users: Dict[str, Any], user_id: int, value: bool, *, action: str = ""
+) -> None:
     uid = str(user_id)
     row = users.setdefault(uid, {"id": user_id})
     row["marketing_opt_in"] = value
     ts = now_iso()
     if value:
         row["marketing_opt_in_at"] = ts
+        row["marketing_consent_version"] = MARKETING_CONSENT_VERSION
+        row["marketing_consent_action"] = str(action)[:64]
         row.pop("marketing_opt_out_at", None)
+        row.pop("marketing_opt_out_action", None)
     else:
         row["marketing_opt_out_at"] = ts
+        row["marketing_opt_out_action"] = str(action)[:64]
 
 
 def capture_start_param(users: Dict[str, Any], user_id: int, payload: str) -> bool:
@@ -175,10 +205,14 @@ def mark_marketing_offer_shown(users: Dict[str, Any], user_id: int) -> None:
     uid = str(user_id)
     row = users.setdefault(uid, {"id": user_id})
     row["marketing_offer_shown_at"] = now_iso()
+    row["marketing_offer_version"] = MARKETING_CONSENT_VERSION
 
 
 def marketing_offer_was_shown(users: Dict[str, Any], user_id: int) -> bool:
-    return bool(get_user(users, user_id).get("marketing_offer_shown_at"))
+    row = get_user(users, user_id)
+    return bool(row.get("marketing_offer_shown_at")) and row.get(
+        "marketing_offer_version"
+    ) == MARKETING_CONSENT_VERSION
 
 
 def is_admin_blocked(users: Dict[str, Any], user_id: int) -> bool:
@@ -292,12 +326,15 @@ def segment_filter(name: str) -> Callable[[Dict[str, Any]], bool]:
     if name == "with_policy":
         return lambda r: bool(r.get("policy_accepted_at")) and r.get("policy_version") == POLICY_VERSION
     if name in ("marketing", "marketing_opt_in"):
-        return lambda r: bool(r.get("marketing_opt_in"))
+        return lambda r: bool(r.get("marketing_opt_in")) and r.get(
+            "marketing_consent_version"
+        ) == MARKETING_CONSENT_VERSION
     if name in ("vip", "vip_access"):
         return lambda r: bool(r.get("vip"))
     if name == "marketing_ready":
         return lambda r: (
             bool(r.get("marketing_opt_in"))
+            and r.get("marketing_consent_version") == MARKETING_CONSENT_VERSION
             and bool(r.get("policy_accepted_at"))
             and r.get("policy_version") == POLICY_VERSION
             and r.get("bot_status", "active") != "blocked"
@@ -342,9 +379,13 @@ def export_users_csv(
             "blocked_at",
             "policy_accepted_at",
             "policy_version",
+            "personal_data_consent_action",
             "marketing_opt_in",
             "marketing_opt_in_at",
+            "marketing_consent_version",
+            "marketing_consent_action",
             "marketing_opt_out_at",
+            "marketing_opt_out_action",
             "start_param",
             "vip",
             "vip_source",
@@ -370,9 +411,13 @@ def export_users_csv(
                 row.get("blocked_at") or "",
                 row.get("policy_accepted_at") or "",
                 row.get("policy_version") or "",
+                row.get("personal_data_consent_action") or "",
                 "1" if row.get("marketing_opt_in") else "0",
                 row.get("marketing_opt_in_at") or "",
+                row.get("marketing_consent_version") or "",
+                row.get("marketing_consent_action") or "",
                 row.get("marketing_opt_out_at") or "",
+                row.get("marketing_opt_out_action") or "",
                 row.get("start_param") or "",
                 "1" if row.get("vip") else "0",
                 row.get("vip_source") or "",
@@ -413,7 +458,10 @@ def stats_summary(users: Dict[str, Any]) -> Dict[str, int]:
             out["vip"] += 1
         if not row.get("policy_accepted_at") or row.get("policy_version") != POLICY_VERSION:
             out["no_policy"] += 1
-        if row.get("marketing_opt_in"):
+        if (
+            row.get("marketing_opt_in")
+            and row.get("marketing_consent_version") == MARKETING_CONSENT_VERSION
+        ):
             out["marketing"] += 1
         if row.get("bot_status") == "blocked":
             out["blocked"] += 1
@@ -461,7 +509,7 @@ def show_marketing_subscribe_in_main_menu(
         return False
     if not has_current_policy(users, user_id):
         return False
-    return not bool(row.get("marketing_opt_in"))
+    return not has_current_marketing_consent(users, user_id)
 
 
 def main_reply_keyboard(

@@ -16,6 +16,13 @@ class AsyncLock:
 
 
 class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.consent_log_append = patch.object(
+            consent_handlers.consent_log, "append", new=AsyncMock()
+        )
+        self.mock_consent_log_append = self.consent_log_append.start()
+        self.addCleanup(self.consent_log_append.stop)
+
     def make_update(self, user_id: int = 42):
         user = SimpleNamespace(id=user_id, username=None, is_bot=False)
         message = SimpleNamespace(reply_text=AsyncMock(), text="")
@@ -58,7 +65,13 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
             args=[],
             bot=SimpleNamespace(set_chat_menu_button=AsyncMock()),
         )
-        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z", "policy_version": "2024-08-03"}}
+        users = {
+            "42": {
+                "id": 42,
+                "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            }
+        }
 
         with (
             patch.object(bot, "_load_users", return_value=users),
@@ -108,11 +121,24 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.user_data["pending_action"], "start")
         self.assertEqual(saved["42"]["id"], 42)
         self.assertIn("policy_accepted_at", saved["42"])
+        self.assertEqual(
+            saved["42"]["policy_version"],
+            bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+        )
+        log_kwargs = self.mock_consent_log_append.await_args.kwargs
+        self.assertEqual(log_kwargs["document"], "personal-data-consent")
+        self.assertEqual(log_kwargs["action"], ui.CB_POLICY_ACCEPT)
         self.assertNotIn("username", saved["42"])
         self.assertNotIn("first_name", saved["42"])
 
     async def test_marketing_choice_continues_pending_start(self):
-        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z", "policy_version": "2024-08-03"}}
+        users = {
+            "42": {
+                "id": 42,
+                "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            }
+        }
         query = SimpleNamespace(
             data=ui.CB_MARKETING_YES,
             from_user=SimpleNamespace(id=42),
@@ -132,10 +158,20 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending, "start")
         self.assertNotIn("pending_action", context.user_data)
         self.assertTrue(users["42"]["marketing_opt_in"])
+        self.assertEqual(
+            users["42"]["marketing_consent_version"],
+            bot.user_registry.MARKETING_CONSENT_VERSION,
+        )
         query.message.reply_text.assert_not_awaited()
 
     async def test_marketing_refusal_does_not_remove_policy_access(self):
-        users = {"42": {"id": 42, "policy_accepted_at": "2026-08-15T00:00:00Z", "policy_version": "2024-08-03"}}
+        users = {
+            "42": {
+                "id": 42,
+                "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            }
+        }
         query = SimpleNamespace(data=ui.CB_MARKETING_NO, from_user=SimpleNamespace(id=42), answer=AsyncMock(), message=SimpleNamespace(reply_text=AsyncMock()))
         context = SimpleNamespace(user_data={})
         await consent_handlers.consent_callback(update=SimpleNamespace(callback_query=query), context=context, users_lock=AsyncLock(), load_users=lambda: users, save_users=lambda _v: None)
@@ -154,6 +190,27 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await bot.handle_text(update, context)
 
+        save_profile.assert_not_awaited()
+
+    async def test_start_does_not_store_deep_link_before_policy_consent(self):
+        update = self.make_update()
+        users = {}
+        context = SimpleNamespace(
+            user_data={},
+            args=["utm_campaign=private"],
+            bot=SimpleNamespace(set_chat_menu_button=AsyncMock()),
+        )
+
+        with (
+            patch.object(bot, "_load_users", return_value=users),
+            patch.object(bot, "_save_users", new=MagicMock()) as save_users,
+            patch.object(bot, "ensure_user_saved", new=AsyncMock()) as save_profile,
+            patch.object(bot.consent_handlers, "show_policy_gate", new=AsyncMock()),
+        ):
+            await bot.start(update, context)
+
+        self.assertEqual(users, {})
+        save_users.assert_not_called()
         save_profile.assert_not_awaited()
 
     async def test_pending_angel_is_continued_after_policy(self):

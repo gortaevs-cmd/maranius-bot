@@ -13,8 +13,9 @@ class AdminSegmentsTests(unittest.TestCase):
         predicate = user_registry.segment_filter("marketing_ready")
         ready = {
             "marketing_opt_in": True,
+            "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
             "policy_accepted_at": "2026-08-01T00:00:00Z",
-            "policy_version": "2024-08-03",
+            "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
             "bot_status": "active",
             "admin_blocked": False,
             "is_internal": False,
@@ -32,7 +33,12 @@ class AdminSegmentsTests(unittest.TestCase):
             self.assertFalse(predicate(row), field)
 
     def test_legacy_segment_names_remain_compatible(self):
-        row = {"bot_status": "active", "vip": True, "marketing_opt_in": True}
+        row = {
+            "bot_status": "active",
+            "vip": True,
+            "marketing_opt_in": True,
+            "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
+        }
         self.assertTrue(user_registry.segment_filter("subscribed")(row))
         self.assertTrue(user_registry.segment_filter("vip")(row))
         self.assertTrue(user_registry.segment_filter("marketing")(row))
@@ -64,7 +70,11 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
                 user_id=42,
                 event="policy_accepted",
                 value=True,
-                policy_version="2024-08-03",
+                policy_version=user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                purpose="personal_data_processing",
+                document="personal-data-consent",
+                document_url="https://maranius.ru/legal/personal-data-consent/",
+                action="consent:policy:accept",
                 source="gate",
             )
             csv_text = (await consent_log.export_csv_bytes(path)).decode("utf-8-sig")

@@ -31,13 +31,31 @@ class MarketingOptInTests(unittest.TestCase):
         user_registry.set_marketing_opt_in(users, 42, True)
         self.assertTrue(users["42"]["marketing_opt_in"])
         self.assertNotIn("marketing_opt_out_at", users["42"])
+        self.assertEqual(
+            users["42"]["marketing_consent_version"],
+            user_registry.MARKETING_CONSENT_VERSION,
+        )
+
+    def test_legacy_marketing_opt_in_is_not_current_consent(self):
+        users = {
+            "42": {
+                "id": 42,
+                "marketing_opt_in": True,
+                "marketing_opt_in_at": "2026-08-01T10:00:00Z",
+            }
+        }
+        self.assertFalse(user_registry.has_current_marketing_consent(users, 42))
+        self.assertFalse(user_registry.segment_filter("marketing_opt_in")(users["42"]))
 
 
 class PolicyVersionTests(unittest.TestCase):
     def test_has_current_policy_requires_matching_version(self):
         users = {
-            "1": {"policy_accepted_at": "2026-01-01T00:00:00Z", "policy_version": "2024-08-03"},
-            "2": {"policy_accepted_at": "2026-01-01T00:00:00Z", "policy_version": "2020-01-01"},
+            "1": {
+                "policy_accepted_at": "2026-01-01T00:00:00Z",
+                "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            },
+            "2": {"policy_accepted_at": "2026-01-01T00:00:00Z", "policy_version": "2024-08-03"},
         }
         self.assertTrue(user_registry.has_current_policy(users, 1))
         self.assertFalse(user_registry.has_current_policy(users, 2))
@@ -49,7 +67,12 @@ class PolicyVersionTests(unittest.TestCase):
             predicate({"policy_accepted_at": "2026-01-01T00:00:00Z", "policy_version": "old"})
         )
         self.assertFalse(
-            predicate({"policy_accepted_at": "2026-01-01T00:00:00Z", "policy_version": "2024-08-03"})
+            predicate(
+                {
+                    "policy_accepted_at": "2026-01-01T00:00:00Z",
+                    "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                }
+            )
         )
 
 
@@ -70,7 +93,11 @@ class ConsentLogTests(unittest.IsolatedAsyncioTestCase):
                 user_id=42,
                 event="policy_accepted",
                 value=True,
-                policy_version="2024-08-03",
+                policy_version=user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                purpose="personal_data_processing",
+                document="personal-data-consent",
+                document_url="https://maranius.ru/legal/personal-data-consent/",
+                action="consent:policy:accept",
                 source="gate",
             )
             await consent_log.append(
@@ -84,6 +111,8 @@ class ConsentLogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[1]["id"], first["id"])
             self.assertEqual(rows[0]["event"], "marketing_opt_in")
+            self.assertEqual(rows[1]["document"], "personal-data-consent")
+            self.assertEqual(rows[1]["action"], "consent:policy:accept")
 
 
 class ExportCsvTests(unittest.TestCase):
@@ -93,12 +122,14 @@ class ExportCsvTests(unittest.TestCase):
                 "id": 1,
                 "marketing_opt_in": True,
                 "marketing_opt_in_at": "2026-08-01T10:00:00Z",
+                "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
                 "language_code": "ru",
                 "timezone": "Europe/Moscow",
             }
         }
         text = user_registry.export_users_csv(users).decode("utf-8-sig")
         self.assertIn("marketing_opt_in_at", text)
+        self.assertIn("marketing_consent_version", text)
         self.assertIn("language_code", text)
         self.assertIn("Europe/Moscow", text)
 

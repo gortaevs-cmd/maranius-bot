@@ -23,7 +23,7 @@ class ProfileKeyboardTests(unittest.TestCase):
             "42": {
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
-                "policy_version": "2024-08-03",
+                "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
                 "marketing_opt_in": False,
             }
         }
@@ -38,8 +38,9 @@ class ProfileKeyboardTests(unittest.TestCase):
             "42": {
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
-                "policy_version": "2024-08-03",
+                "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
                 "marketing_opt_in": True,
+                "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
             }
         }
         self.assertFalse(
@@ -57,6 +58,7 @@ class ProfileStatusTests(unittest.TestCase):
             "vip_source": "code",
             "marketing_opt_in": True,
             "marketing_opt_in_at": "2026-08-02T12:00:00Z",
+            "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
             "policy_accepted_at": "2026-08-01T10:00:00Z",
         }
         text = profile_handlers.format_status_html(

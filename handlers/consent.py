@@ -68,22 +68,41 @@ async def show_marketing_offer(update: Update) -> None:
     )
 
 
-async def _log_policy(user_id: int, *, source: str) -> None:
+async def _log_policy(user_id: int, *, source: str, action: str) -> None:
     await consent_log.append(
         user_id=user_id,
         event="policy_accepted",
         value=True,
-        policy_version=user_registry.POLICY_VERSION,
+        purpose="personal_data_processing",
+        document="personal-data-consent",
+        document_url=ui.URL_PERSONAL_DATA_CONSENT,
+        policy_version=user_registry.PERSONAL_DATA_CONSENT_VERSION,
+        action=action,
         source=source,
+        meta={
+            "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
+            "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
+        },
     )
 
 
-async def _log_marketing(user_id: int, value: bool, *, source: str) -> None:
+async def _log_marketing(
+    user_id: int, value: bool, *, source: str, action: str
+) -> None:
     await consent_log.append(
         user_id=user_id,
         event="marketing_opt_in" if value else "marketing_opt_out",
         value=value,
+        purpose="telegram_marketing",
+        document="marketing-consent",
+        document_url=ui.URL_MARKETING_CONSENT,
+        policy_version=user_registry.MARKETING_CONSENT_VERSION,
+        action=action,
         source=source,
+        meta={
+            "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
+            "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
+        },
     )
 
 
@@ -100,13 +119,13 @@ async def after_policy_accepted(
         return
     async with users_lock:
         users = load_users()
-        user_registry.accept_policy(users, user.id)
+        user_registry.accept_policy(users, user.id, action=ui.CB_POLICY_ACCEPT)
         save_users(users)
         shown = user_registry.marketing_offer_was_shown(users, user.id)
         if not shown:
             user_registry.mark_marketing_offer_shown(users, user.id)
             save_users(users)
-    await _log_policy(user.id, source="gate")
+    await _log_policy(user.id, source="gate", action=ui.CB_POLICY_ACCEPT)
     if not shown:
         await show_marketing_offer(update)
         return
@@ -159,12 +178,12 @@ async def consent_callback(
             if user_registry.is_admin_blocked(users, user.id):
                 await query.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return None
-            user_registry.accept_policy(users, user.id)
+            user_registry.accept_policy(users, user.id, action=data)
             shown = user_registry.marketing_offer_was_shown(users, user.id)
             if not shown:
                 user_registry.mark_marketing_offer_shown(users, user.id)
             save_users(users)
-        await _log_policy(user.id, source="gate")
+        await _log_policy(user.id, source="gate", action=data)
         if not shown:
             await query.message.reply_text(
                 ui.MSG_MARKETING_OFFER,
@@ -185,9 +204,11 @@ async def consent_callback(
         opt_in = data == ui.CB_MARKETING_YES
         async with users_lock:
             users = load_users()
-            user_registry.set_marketing_opt_in(users, user.id, opt_in)
+            user_registry.set_marketing_opt_in(users, user.id, opt_in, action=data)
             save_users(users)
-        await _log_marketing(user.id, opt_in, source="marketing_offer")
+        await _log_marketing(
+            user.id, opt_in, source="marketing_offer", action=data
+        )
         pending = context.user_data.pop("pending_action", None)
         if pending:
             return pending
@@ -202,9 +223,9 @@ async def consent_callback(
     if data == ui.CB_MARKETING_TOGGLE_ON:
         async with users_lock:
             users = load_users()
-            user_registry.set_marketing_opt_in(users, user.id, True)
+            user_registry.set_marketing_opt_in(users, user.id, True, action=data)
             save_users(users)
-        await _log_marketing(user.id, True, source="profile")
+        await _log_marketing(user.id, True, source="policy_screen", action=data)
         await query.message.reply_text(
             ui.MSG_MARKETING_ON,
             parse_mode="HTML",
@@ -215,9 +236,9 @@ async def consent_callback(
     if data == ui.CB_MARKETING_TOGGLE_OFF:
         async with users_lock:
             users = load_users()
-            user_registry.set_marketing_opt_in(users, user.id, False)
+            user_registry.set_marketing_opt_in(users, user.id, False, action=data)
             save_users(users)
-        await _log_marketing(user.id, False, source="profile")
+        await _log_marketing(user.id, False, source="policy_screen", action=data)
         await query.message.reply_text(
             ui.MSG_MARKETING_OFF,
             parse_mode="HTML",

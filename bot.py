@@ -579,15 +579,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not message:
         return
 
-    if getattr(context, "args", None):
-        payload = " ".join(context.args).strip()
-        if payload:
-            async with _users_lock:
-                users = _load_users()
-                user_registry.capture_start_param(users, user.id, payload)
-                _save_users(users)
-
-    # До согласия не сохраняем Telegram-профиль нового пользователя.
+    # До согласия не сохраняем Telegram-профиль или параметр deep-link нового
+    # пользователя. Параметр /start может быть данными для аналитики и пишется
+    # только после отдельного активного согласия.
     # Seed-админ — внутренний служебный аккаунт.
     if user.id not in SEED_ADMIN_IDS:
         async with _users_lock:
@@ -598,6 +592,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
     await ensure_user_saved(update, bot=context.bot, force=user.id in SEED_ADMIN_IDS)
+    if getattr(context, "args", None):
+        payload = " ".join(context.args).strip()
+        if payload:
+            async with _users_lock:
+                users = _load_users()
+                user_registry.capture_start_param(users, user.id, payload)
+                _save_users(users)
     async with _users_lock:
         users = _load_users()
         if users.get(str(user.id), {}).get("bot_status") == "blocked":
@@ -1622,8 +1623,8 @@ def _admin_user_card_text(uid: int, row: Dict[str, Any]) -> str:
         vip_source=vip_source,
         bot_status="заблокировал" if row.get("bot_status") == "blocked" else "доступен",
         admin_blocked="да" if row.get("admin_blocked") else "нет",
-        marketing="да" if row.get("marketing_opt_in") else "нет",
-        policy="да" if row.get("policy_accepted_at") else "нет",
+        marketing="да" if user_registry.has_current_marketing_consent(_load_users(), uid) else "нет",
+        policy="да" if user_registry.has_current_policy(_load_users(), uid) else "нет",
         last_seen=html.escape(str(row.get("last_seen") or "—")),
     )
 
@@ -1880,11 +1881,14 @@ def _admin_consent_row(entry: Dict[str, Any]) -> str:
     event = events.get(str(entry.get("event")), str(entry.get("event") or "согласие"))
     source = str(entry.get("source") or "—")
     version = str(entry.get("policy_version") or "—")
+    document = str(entry.get("document") or "—")
+    action = str(entry.get("action") or "—")
     return (
         f"• <code>{html.escape(str(entry.get('created_at') or ''))}</code> — "
         f"user <code>{html.escape(str(entry.get('user_id') or ''))}</code>: "
         f"{html.escape(event)}; источник: {html.escape(source)}; "
-        f"версия: {html.escape(version)}"
+        f"документ: {html.escape(document)}; версия: {html.escape(version)}; "
+        f"действие: {html.escape(action)}"
     )
 
 
@@ -2254,37 +2258,40 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         user = query.from_user
         if not user:
             return
-        row = user_registry.get_user(_load_users(), user.id)
-        opt_in = bool(row.get("marketing_opt_in"))
+        users = _load_users()
+        opt_in = user_registry.has_current_marketing_consent(users, user.id)
         await _edit_or_reply(
             msg,
             profile_handlers.subscriptions_message(marketing_opt_in=opt_in),
             ui.get_profile_subs_keyboard(marketing_opt_in=opt_in),
         )
         return
-    if data in (ui.CB_PROFILE_SUB_ON, ui.CB_PROFILE_SUB_OFF):
+    if data == ui.CB_PROFILE_SUB_ON:
+        context.user_data["pending_action"] = "marketing_subscribe"
+        await consent_handlers.show_marketing_offer(update)
+        return
+    if data == ui.CB_PROFILE_SUB_OFF:
         user = query.from_user
         if not user:
             return
-        value = data == ui.CB_PROFILE_SUB_ON
         await profile_handlers.set_marketing_opt_in(
             users_lock=_users_lock,
             load_users=_load_users,
             save_users=_save_users,
             user_id=user.id,
-            value=value,
+            value=False,
+            source="profile",
+            action=data,
         )
-        row = user_registry.get_user(_load_users(), user.id)
-        opt_in = bool(row.get("marketing_opt_in"))
+        opt_in = user_registry.has_current_marketing_consent(_load_users(), user.id)
         await _edit_or_reply(
             msg,
             profile_handlers.subscriptions_message(marketing_opt_in=opt_in),
             ui.get_profile_subs_keyboard(marketing_opt_in=opt_in),
         )
-        confirm = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
         await context.bot.send_message(
             chat_id=user.id,
-            text=confirm,
+            text=ui.MSG_MARKETING_OFF,
             parse_mode="HTML",
             reply_markup=_main_keyboard_for(user.id),
         )
@@ -2429,7 +2436,7 @@ async def _continue_pending_action(
         user = update.effective_user
         if user and update.effective_message:
             users = _load_users()
-            opt_in = bool(user_registry.get_user(users, user.id).get("marketing_opt_in"))
+            opt_in = user_registry.has_current_marketing_consent(users, user.id)
             text = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
             await update.effective_message.reply_text(
                 text,
@@ -2463,13 +2470,24 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if user:
             async with _users_lock:
                 users = _load_users()
-                user_registry.set_marketing_opt_in(users, user.id, False)
+                user_registry.set_marketing_opt_in(
+                    users, user.id, False, action=ui.CB_MARKETING_UNSUB
+                )
                 _save_users(users)
             await consent_log.append(
                 user_id=user.id,
                 event="marketing_opt_out",
                 value=False,
+                purpose="telegram_marketing",
+                document="marketing-consent",
+                document_url=ui.URL_MARKETING_CONSENT,
+                policy_version=user_registry.MARKETING_CONSENT_VERSION,
+                action=ui.CB_MARKETING_UNSUB,
                 source="unsub_button",
+                meta={
+                    "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
+                    "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
+                },
             )
             if query.message:
                 await query.message.reply_text(
@@ -2522,20 +2540,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 context.user_data["pending_action"] = "marketing_subscribe"
                 await consent_handlers.show_policy_gate(update, context)
                 return
-            user_registry.set_marketing_opt_in(users, user.id, True)
-            _save_users(users)
-        await consent_log.append(
-            user_id=user.id,
-            event="marketing_opt_in",
-            value=True,
-            source="main_menu",
-        )
-        await ensure_user_saved(update, bot=context.bot)
-        await update.message.reply_text(
-            ui.MSG_MARKETING_ON,
-            parse_mode="HTML",
-            reply_markup=_main_keyboard_for(user.id),
-        )
+        context.user_data["pending_action"] = "marketing_subscribe"
+        await consent_handlers.show_marketing_offer(update)
         return
     if text.casefold() in (
         "новое место",

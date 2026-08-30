@@ -32,8 +32,10 @@ URL_ANGEL_COURSE = (
 URL_KRYON_BOT = "https://t.me/KryonCrystalsBot"
 URL_CARD_OF_DAY = "https://maranius.ru/karta-dnya"
 URL_CARD_INSTRUCTION = "https://telegra.ph/Koloda-kart-Podskazki-Vselennoj-08-03"
-URL_POLICY = "https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-08-03"
-URL_CONSENT = "https://telegra.ph/SOGLASIE-NA-OBRABOTKU-PERSONALNYH-DANNYH-05-31-2"
+URL_PRIVACY_POLICY = "https://maranius.ru/legal/privacy-policy/"
+URL_PERSONAL_DATA_CONSENT = "https://maranius.ru/legal/personal-data-consent/"
+URL_MARKETING_CONSENT = "https://maranius.ru/legal/marketing-consent/"
+URL_USER_AGREEMENT = "https://maranius.ru/legal/user-agreement/"
 URL_AUTHOR = "https://t.me/maraniuss"
 CONTACTS_HTML = f'<a href="{URL_AUTHOR}">@maraniuss</a>'
 
@@ -256,32 +258,44 @@ MSG_INFO_FAQ = (
 )
 
 MSG_POLICY_STUB = (
-    f'<a href="{URL_POLICY}">Политика обработки персональных данных</a>\n'
-    f'<a href="{URL_CONSENT}">Согласие на обработку персональных данных</a>'
+    f'<a href="{URL_PRIVACY_POLICY}">Политика конфиденциальности</a>\n'
+    f'<a href="{URL_PERSONAL_DATA_CONSENT}">Согласие на обработку персональных данных</a>\n'
+    f'<a href="{URL_MARKETING_CONSENT}">Согласие на рекламные сообщения</a>\n'
+    f'<a href="{URL_USER_AGREEMENT}">Пользовательское соглашение</a>'
 )
 
 MSG_POLICY_FULL = (
-    "<b>Политика и согласие</b>\n\n"
-    f'• <a href="{URL_POLICY}">Политика обработки персональных данных</a>\n'
-    f'• <a href="{URL_CONSENT}">Согласие на обработку персональных данных</a>\n\n'
-    "Маркетинговые рассылки — отдельно, только по вашему желанию."
+    "<b>Документы Maranius</b>\n\n"
+    f'• <a href="{URL_PRIVACY_POLICY}">Политика конфиденциальности</a>\n'
+    f'• <a href="{URL_PERSONAL_DATA_CONSENT}">Согласие на обработку персональных данных</a>\n'
+    f'• <a href="{URL_MARKETING_CONSENT}">Согласие на рекламные сообщения</a>\n'
+    f'• <a href="{URL_USER_AGREEMENT}">Пользовательское соглашение</a>\n\n'
+    "Согласие на рекламные сообщения добровольное и не влияет на доступ к базовым функциям бота."
 )
 
 MSG_POLICY_GATE = (
-    "Перед использованием бота нужно принять политику обработки персональных данных.\n\n"
-    f'• <a href="{URL_POLICY}">Политика</a>\n'
-    f'• <a href="{URL_CONSENT}">Согласие</a>'
+    "Чтобы пользоваться функциями бота, ознакомьтесь с документами.\n\n"
+    f'• <a href="{URL_PRIVACY_POLICY}">Политика конфиденциальности</a>\n'
+    f'• <a href="{URL_PERSONAL_DATA_CONSENT}">Согласие на обработку персональных данных</a>\n'
+    f'• <a href="{URL_USER_AGREEMENT}">Пользовательское соглашение</a>\n\n'
+    "Нажимая кнопку ниже, вы совершаете отдельное активное действие — даёте согласие "
+    "на обработку персональных данных для работы бота."
 )
 
-MSG_POLICY_ACCEPTED = "Спасибо. Политику приняли — можно пользоваться ботом."
+MSG_POLICY_ACCEPTED = "Спасибо. Согласие на обработку персональных данных зафиксировано — можно пользоваться ботом."
 MSG_POLICY_CONTINUE = "Продолжай с нужного раздела в меню."
 MSG_ACCESS_RESTRICTED = "Доступ ограничен."
 
 MSG_MARKETING_OFFER = (
-    "Хотите получать новости и анонсы Maranius в Telegram?\n"
-    "Это необязательно — сервисные сообщения (VIP, ответы) приходят без рассылки."
+    "<b>Новости и анонсы Maranius в Telegram</b>\n\n"
+    "По желанию вы можете получать новости, анонсы, приглашения и специальные предложения "
+    "в личном чате этого бота.\n\n"
+    f'Перед выбором ознакомьтесь с <a href="{URL_MARKETING_CONSENT}">согласием на рекламные сообщения</a>, '
+    f'<a href="{URL_PRIVACY_POLICY}">Политикой конфиденциальности</a> и '
+    f'<a href="{URL_USER_AGREEMENT}">Пользовательским соглашением</a>.\n\n'
+    "Это необязательно: сервисные сообщения о VIP-доступе, заказе или ответе на обращение приходят без рассылки."
 )
-MSG_MARKETING_ON = "Вы подписаны на новости и анонсы."
+MSG_MARKETING_ON = "Согласие на новости и анонсы зафиксировано. Отказаться можно в настройках профиля или кнопкой в рассылке."
 MSG_MARKETING_OFF = "Рассылку отключили. Сервисные сообщения по-прежнему возможны."
 
 MSG_PROFILE_MENU = (
@@ -309,8 +323,8 @@ CB_MARKETING_TOGGLE_ON = "consent:marketing:on"
 CB_MARKETING_TOGGLE_OFF = "consent:marketing:off"
 CB_MARKETING_UNSUB = "consent:marketing:unsub"
 
-BTN_POLICY_ACCEPT = "✅ Принимаю политику"
-BTN_MARKETING_YES = "📬 Да, хочу новости"
+BTN_POLICY_ACCEPT = "✅ Даю согласие на обработку данных"
+BTN_MARKETING_YES = "📬 Да, хочу получать новости"
 BTN_MARKETING_NO = "Не сейчас"
 BTN_MARKETING_ON = "📬 Подписаться на рассылку"
 BTN_MARKETING_OFF = "🔕 Отключить рассылку"
@@ -586,13 +600,25 @@ def get_admin_vip_prompt_keyboard() -> InlineKeyboardMarkup:
 
 def get_policy_gate_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(BTN_POLICY_ACCEPT, callback_data=CB_POLICY_ACCEPT)]]
+        [
+            [
+                InlineKeyboardButton("Политика конфиденциальности", url=URL_PRIVACY_POLICY),
+                InlineKeyboardButton("Согласие на ПДн", url=URL_PERSONAL_DATA_CONSENT),
+            ],
+            [InlineKeyboardButton("Пользовательское соглашение", url=URL_USER_AGREEMENT)],
+            [InlineKeyboardButton(BTN_POLICY_ACCEPT, callback_data=CB_POLICY_ACCEPT)],
+        ]
     )
 
 
 def get_marketing_offer_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [
+                InlineKeyboardButton("Согласие на рекламу", url=URL_MARKETING_CONSENT),
+                InlineKeyboardButton("Политика конфиденциальности", url=URL_PRIVACY_POLICY),
+            ],
+            [InlineKeyboardButton("Пользовательское соглашение", url=URL_USER_AGREEMENT)],
             [
                 InlineKeyboardButton(BTN_MARKETING_YES, callback_data=CB_MARKETING_YES),
                 InlineKeyboardButton(BTN_MARKETING_NO, callback_data=CB_MARKETING_NO),

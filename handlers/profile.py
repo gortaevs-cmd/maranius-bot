@@ -57,7 +57,11 @@ def format_status_html(
     else:
         vip_block = "• не активен"
 
-    if row.get("marketing_opt_in"):
+    if (
+        row.get("marketing_opt_in")
+        and row.get("marketing_consent_version")
+        == user_registry.MARKETING_CONSENT_VERSION
+    ):
         mkt_date = _fmt_date(str(row.get("marketing_opt_in_at") or ""))
         marketing_block = f"• подписаны (с {mkt_date})"
     else:
@@ -97,14 +101,24 @@ async def set_marketing_opt_in(
     user_id: int,
     value: bool,
     source: str = "profile",
+    action: str = "",
 ) -> None:
     async with users_lock:
         users = load_users()
-        user_registry.set_marketing_opt_in(users, user_id, value)
+        user_registry.set_marketing_opt_in(users, user_id, value, action=action)
         save_users(users)
     await consent_log.append(
         user_id=user_id,
         event="marketing_opt_in" if value else "marketing_opt_out",
         value=value,
+        purpose="telegram_marketing",
+        document="marketing-consent",
+        document_url=ui.URL_MARKETING_CONSENT,
+        policy_version=user_registry.MARKETING_CONSENT_VERSION,
+        action=action,
         source=source,
+        meta={
+            "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
+            "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
+        },
     )
