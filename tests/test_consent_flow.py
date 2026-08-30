@@ -178,6 +178,32 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(users["42"]["marketing_opt_in"])
         self.assertIn("policy_accepted_at", users["42"])
 
+    async def test_marketing_choice_without_current_policy_returns_to_policy_gate(self):
+        users = {"42": {"id": 42, "policy_version": "2024-08-03"}}
+        query = SimpleNamespace(
+            data=ui.CB_MARKETING_YES,
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+            message=SimpleNamespace(reply_text=AsyncMock()),
+        )
+
+        pending = await consent_handlers.consent_callback(
+            update=SimpleNamespace(callback_query=query),
+            context=SimpleNamespace(user_data={}),
+            users_lock=AsyncLock(),
+            load_users=lambda: users,
+            save_users=MagicMock(),
+        )
+
+        self.assertIsNone(pending)
+        self.assertNotIn("marketing_opt_in", users["42"])
+        self.mock_consent_log_append.assert_not_awaited()
+        query.message.reply_text.assert_awaited_once_with(
+            ui.MSG_POLICY_GATE,
+            parse_mode="HTML",
+            reply_markup=ui.get_policy_gate_keyboard(),
+        )
+
     async def test_handle_text_does_not_save_profile_without_policy(self):
         update = self.make_update()
         update.message.text = "привет"

@@ -201,6 +201,13 @@ async def consent_callback(
         return context.user_data.pop("pending_action", None)
 
     if data in (ui.CB_MARKETING_YES, ui.CB_MARKETING_NO):
+        if not user_registry.has_current_policy(load_users(), user.id):
+            await query.message.reply_text(
+                ui.MSG_POLICY_GATE,
+                parse_mode="HTML",
+                reply_markup=ui.get_policy_gate_keyboard(),
+            )
+            return None
         opt_in = data == ui.CB_MARKETING_YES
         async with users_lock:
             users = load_users()
