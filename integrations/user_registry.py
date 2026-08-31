@@ -45,6 +45,9 @@ _PRESERVE_KEYS = (
     "policy_accepted_at",
     "policy_version",
     "personal_data_consent_action",
+    "user_agreement_accepted_at",
+    "user_agreement_version",
+    "user_agreement_accept_action",
     "marketing_opt_in",
     "marketing_opt_in_at",
     "marketing_consent_version",
@@ -159,6 +162,31 @@ def accept_policy(users: Dict[str, Any], user_id: int, *, action: str = "") -> N
     row["policy_accepted_at"] = now_iso()
     row["policy_version"] = POLICY_VERSION
     row["personal_data_consent_action"] = str(action)[:64]
+
+
+def has_current_user_agreement(users: Dict[str, Any], user_id: int) -> bool:
+    """Пользователь отдельно принял действующую редакцию соглашения."""
+    row = get_user(users, user_id)
+    return bool(row.get("user_agreement_accepted_at")) and row.get(
+        "user_agreement_version"
+    ) == USER_AGREEMENT_VERSION
+
+
+def accept_user_agreement(
+    users: Dict[str, Any], user_id: int, *, action: str = ""
+) -> None:
+    uid = str(user_id)
+    row = users.setdefault(uid, {"id": user_id})
+    row["user_agreement_accepted_at"] = now_iso()
+    row["user_agreement_version"] = USER_AGREEMENT_VERSION
+    row["user_agreement_accept_action"] = str(action)[:64]
+
+
+def has_current_access(users: Dict[str, Any], user_id: int) -> bool:
+    """Для доступа нужны и ПДн, и отдельный акцепт пользовательского соглашения."""
+    return has_current_policy(users, user_id) and has_current_user_agreement(
+        users, user_id
+    )
 
 
 def has_current_marketing_consent(users: Dict[str, Any], user_id: int) -> bool:
@@ -337,6 +365,8 @@ def segment_filter(name: str) -> Callable[[Dict[str, Any]], bool]:
             and r.get("marketing_consent_version") == MARKETING_CONSENT_VERSION
             and bool(r.get("policy_accepted_at"))
             and r.get("policy_version") == POLICY_VERSION
+            and bool(r.get("user_agreement_accepted_at"))
+            and r.get("user_agreement_version") == USER_AGREEMENT_VERSION
             and r.get("bot_status", "active") != "blocked"
             and not bool(r.get("admin_blocked"))
             and not bool(r.get("is_internal"))
@@ -380,6 +410,9 @@ def export_users_csv(
             "policy_accepted_at",
             "policy_version",
             "personal_data_consent_action",
+            "user_agreement_accepted_at",
+            "user_agreement_version",
+            "user_agreement_accept_action",
             "marketing_opt_in",
             "marketing_opt_in_at",
             "marketing_consent_version",
@@ -412,6 +445,9 @@ def export_users_csv(
                 row.get("policy_accepted_at") or "",
                 row.get("policy_version") or "",
                 row.get("personal_data_consent_action") or "",
+                row.get("user_agreement_accepted_at") or "",
+                row.get("user_agreement_version") or "",
+                row.get("user_agreement_accept_action") or "",
                 "1" if row.get("marketing_opt_in") else "0",
                 row.get("marketing_opt_in_at") or "",
                 row.get("marketing_consent_version") or "",
@@ -507,7 +543,7 @@ def show_marketing_subscribe_in_main_menu(
     row = get_user(users, user_id)
     if row.get("is_internal"):
         return False
-    if not has_current_policy(users, user_id):
+    if not has_current_access(users, user_id):
         return False
     return not has_current_marketing_consent(users, user_id)
 

@@ -60,6 +60,27 @@ class PolicyVersionTests(unittest.TestCase):
         self.assertTrue(user_registry.has_current_policy(users, 1))
         self.assertFalse(user_registry.has_current_policy(users, 2))
 
+    def test_access_requires_personal_data_consent_and_user_agreement(self):
+        users = {
+            "1": {
+                "id": 1,
+                "policy_accepted_at": "2026-08-31T00:00:00Z",
+                "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            }
+        }
+        self.assertFalse(user_registry.has_current_access(users, 1))
+
+        user_registry.accept_user_agreement(
+            users, 1, action="consent:agreement:accept"
+        )
+
+        self.assertTrue(user_registry.has_current_user_agreement(users, 1))
+        self.assertTrue(user_registry.has_current_access(users, 1))
+        self.assertEqual(
+            users["1"]["user_agreement_version"],
+            user_registry.USER_AGREEMENT_VERSION,
+        )
+
     def test_no_policy_segment_includes_outdated_version(self):
         predicate = user_registry.segment_filter("no_policy")
         self.assertTrue(predicate({"policy_accepted_at": "", "policy_version": ""}))
@@ -116,13 +137,15 @@ class ConsentLogTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExportCsvTests(unittest.TestCase):
-    def test_export_includes_marketing_timestamps(self):
+    def test_export_includes_legal_acceptance_timestamps(self):
         users = {
             "1": {
                 "id": 1,
                 "marketing_opt_in": True,
                 "marketing_opt_in_at": "2026-08-01T10:00:00Z",
                 "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-01T09:00:00Z",
+                "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
                 "language_code": "ru",
                 "timezone": "Europe/Moscow",
             }
@@ -130,6 +153,8 @@ class ExportCsvTests(unittest.TestCase):
         text = user_registry.export_users_csv(users).decode("utf-8-sig")
         self.assertIn("marketing_opt_in_at", text)
         self.assertIn("marketing_consent_version", text)
+        self.assertIn("user_agreement_accepted_at", text)
+        self.assertIn("user_agreement_version", text)
         self.assertIn("language_code", text)
         self.assertIn("Europe/Moscow", text)
 

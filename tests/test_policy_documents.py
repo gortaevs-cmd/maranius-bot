@@ -22,7 +22,7 @@ class PolicyDocumentUiTests(unittest.TestCase):
             "https://maranius.ru/legal/user-agreement/",
         )
 
-    def test_personal_data_gate_has_document_buttons_before_confirmation(self):
+    def test_gate_has_document_buttons_and_two_independent_required_actions(self):
         buttons = [
             button
             for row in ui.get_policy_gate_keyboard().inline_keyboard
@@ -37,7 +37,23 @@ class PolicyDocumentUiTests(unittest.TestCase):
                 ui.URL_USER_AGREEMENT,
             },
         )
-        self.assertIn(ui.CB_POLICY_ACCEPT, [button.callback_data for button in buttons])
+        callbacks = {button.callback_data for button in buttons if button.callback_data}
+        self.assertTrue(
+            {ui.CB_USER_AGREEMENT_ACCEPT, ui.CB_POLICY_ACCEPT} <= callbacks
+        )
+
+    def test_gate_hides_already_completed_action(self):
+        buttons = [
+            button
+            for row in ui.get_policy_gate_keyboard(
+                user_agreement_accepted=True,
+                personal_data_consent_accepted=False,
+            ).inline_keyboard
+            for button in row
+        ]
+        callbacks = {button.callback_data for button in buttons if button.callback_data}
+        self.assertNotIn(ui.CB_USER_AGREEMENT_ACCEPT, callbacks)
+        self.assertIn(ui.CB_POLICY_ACCEPT, callbacks)
 
     def test_marketing_offer_has_all_required_document_buttons_before_opt_in(self):
         buttons = [

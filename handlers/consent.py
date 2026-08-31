@@ -45,15 +45,35 @@ async def show_policy_screen(update: Update, *, with_marketing_controls: bool = 
     )
 
 
-async def show_policy_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def show_policy_gate(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    users: Optional[dict] = None,
+    user_id: Optional[int] = None,
+) -> None:
     message = update.effective_message
     if not message:
         return
+    if users is None:
+        users = user_registry.load_users()
+    if user_id is None and update.effective_user:
+        user_id = update.effective_user.id
+    agreement_accepted = bool(
+        user_id is not None
+        and user_registry.has_current_user_agreement(users, user_id)
+    )
+    personal_data_consent_accepted = bool(
+        user_id is not None and user_registry.has_current_policy(users, user_id)
+    )
     await message.reply_text(
         ui.MSG_POLICY_GATE,
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=ui.get_policy_gate_keyboard(),
+        reply_markup=ui.get_policy_gate_keyboard(
+            user_agreement_accepted=agreement_accepted,
+            personal_data_consent_accepted=personal_data_consent_accepted,
+        ),
     )
 
 
@@ -86,6 +106,24 @@ async def _log_policy(user_id: int, *, source: str, action: str) -> None:
     )
 
 
+async def _log_user_agreement(user_id: int, *, source: str, action: str) -> None:
+    await consent_log.append(
+        user_id=user_id,
+        event="user_agreement_accepted",
+        value=True,
+        purpose="service_terms",
+        document="user-agreement",
+        document_url=ui.URL_USER_AGREEMENT,
+        policy_version=user_registry.USER_AGREEMENT_VERSION,
+        action=action,
+        source=source,
+        meta={
+            "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
+            "personal_data_consent_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+        },
+    )
+
+
 async def _log_marketing(
     user_id: int, value: bool, *, source: str, action: str
 ) -> None:
@@ -104,34 +142,6 @@ async def _log_marketing(
             "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
         },
     )
-
-
-async def after_policy_accepted(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    users_lock,
-    load_users: Callable[[], dict],
-    save_users: Callable[[dict], None],
-) -> None:
-    user = update.effective_user
-    if not user:
-        return
-    async with users_lock:
-        users = load_users()
-        user_registry.accept_policy(users, user.id, action=ui.CB_POLICY_ACCEPT)
-        save_users(users)
-        shown = user_registry.marketing_offer_was_shown(users, user.id)
-        if not shown:
-            user_registry.mark_marketing_offer_shown(users, user.id)
-            save_users(users)
-    await _log_policy(user.id, source="gate", action=ui.CB_POLICY_ACCEPT)
-    if not shown:
-        await show_marketing_offer(update)
-        return
-    pending = context.user_data.pop("pending_action", None)
-    if pending:
-        await message_reply_continue(update)
 
 
 async def message_reply_continue(
@@ -172,18 +182,42 @@ async def consent_callback(
         return None
     data = query.data
 
-    if data == ui.CB_POLICY_ACCEPT:
+    if data in (ui.CB_USER_AGREEMENT_ACCEPT, ui.CB_POLICY_ACCEPT):
         async with users_lock:
             users = load_users()
             if user_registry.is_admin_blocked(users, user.id):
                 await query.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return None
-            user_registry.accept_policy(users, user.id, action=data)
-            shown = user_registry.marketing_offer_was_shown(users, user.id)
-            if not shown:
-                user_registry.mark_marketing_offer_shown(users, user.id)
+            if data == ui.CB_USER_AGREEMENT_ACCEPT:
+                user_registry.accept_user_agreement(users, user.id, action=data)
+            else:
+                user_registry.accept_policy(users, user.id, action=data)
+            access_granted = user_registry.has_current_access(users, user.id)
+            shown = False
+            if access_granted:
+                shown = user_registry.marketing_offer_was_shown(users, user.id)
+                if not shown:
+                    user_registry.mark_marketing_offer_shown(users, user.id)
             save_users(users)
-        await _log_policy(user.id, source="gate", action=data)
+        if data == ui.CB_USER_AGREEMENT_ACCEPT:
+            await _log_user_agreement(user.id, source="gate", action=data)
+        else:
+            await _log_policy(user.id, source="gate", action=data)
+        if not access_granted:
+            await query.message.reply_text(
+                ui.MSG_POLICY_GATE,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=ui.get_policy_gate_keyboard(
+                    user_agreement_accepted=user_registry.has_current_user_agreement(
+                        users, user.id
+                    ),
+                    personal_data_consent_accepted=user_registry.has_current_policy(
+                        users, user.id
+                    ),
+                ),
+            )
+            return None
         if not shown:
             await query.message.reply_text(
                 ui.MSG_MARKETING_OFFER,
@@ -200,14 +234,30 @@ async def consent_callback(
         )
         return context.user_data.pop("pending_action", None)
 
-    if data in (ui.CB_MARKETING_YES, ui.CB_MARKETING_NO):
-        if not user_registry.has_current_policy(load_users(), user.id):
+    if data in (
+        ui.CB_MARKETING_YES,
+        ui.CB_MARKETING_NO,
+        ui.CB_MARKETING_TOGGLE_ON,
+        ui.CB_MARKETING_TOGGLE_OFF,
+    ):
+        users = load_users()
+        if not user_registry.has_current_access(users, user.id):
             await query.message.reply_text(
                 ui.MSG_POLICY_GATE,
                 parse_mode="HTML",
-                reply_markup=ui.get_policy_gate_keyboard(),
+                disable_web_page_preview=True,
+                reply_markup=ui.get_policy_gate_keyboard(
+                    user_agreement_accepted=user_registry.has_current_user_agreement(
+                        users, user.id
+                    ),
+                    personal_data_consent_accepted=user_registry.has_current_policy(
+                        users, user.id
+                    ),
+                ),
             )
             return None
+
+    if data in (ui.CB_MARKETING_YES, ui.CB_MARKETING_NO):
         opt_in = data == ui.CB_MARKETING_YES
         async with users_lock:
             users = load_users()
@@ -272,17 +322,14 @@ async def require_user_access(
     user = update.effective_user
     if not user:
         return False
-    if user.id in seed_admin_ids:
-        return True
-
     async with users_lock:
         users = load_users()
         if user_registry.is_admin_blocked(users, user.id):
             await reply_restricted(update)
             return False
-        if not user_registry.has_current_policy(users, user.id):
+        if not user_registry.has_current_access(users, user.id):
             context.user_data["pending_action"] = action_key
-            await show_policy_gate(update, context)
+            await show_policy_gate(update, context, users=users, user_id=user.id)
             return False
     await analytics.log_section(user.id, action_key)
     return True

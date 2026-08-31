@@ -33,6 +33,7 @@
 | `vip_source` | `code` \| `admin_grant` \| `import` \| `seed_admin` | реализовано |
 | `vip_revoked_at` | ISO | реализовано (при снятии VIP) |
 | `policy_accepted_at`, `policy_version`, `personal_data_consent_action` | ISO, версия согласия на ПДн `2026-08-31-v1.0`, callback активного действия | реализовано |
+| `user_agreement_accepted_at`, `user_agreement_version`, `user_agreement_accept_action` | ISO, версия пользовательского соглашения `2026-08-31-v1.0`, отдельный callback акцепта | реализовано |
 | `marketing_opt_in`, `marketing_opt_in_at` | bool, ISO — последнее положительное маркетинговое согласие | реализовано |
 | `marketing_consent_version`, `marketing_consent_action` | версия `2026-08-31-v1.0`, callback активного opt-in | реализовано |
 | `marketing_offer_shown_at`, `marketing_offer_version` | ISO, версия показанного предложения рассылки | реализовано |
@@ -51,8 +52,8 @@
 
 **Статус:** реализовано (`integrations/consent_log.py`); в production лежит в `/app/.runtime`.
 
-Append-only журнал согласий. Запись: `id`, `created_at`, `user_id`, `event`
-(`policy_accepted`, `marketing_opt_in`, `marketing_opt_out`), `value`, `purpose`,
+Append-only журнал согласий и акцептов. Запись: `id`, `created_at`, `user_id`, `event`
+(`policy_accepted`, `user_agreement_accepted`, `marketing_opt_in`, `marketing_opt_out`), `value`, `purpose`,
 `document`, `policy_version`, `document_url`, `action`, `source`, `meta`. Так фиксируются
 назначение, редакция документа, URL и конкретное активное действие пользователя.
 
@@ -164,7 +165,7 @@ Retention: **365 дней**, максимум **20 000 записей**. Дос�
 | `no_policy` | нет `policy_accepted_at` или устаревший `policy_version` |
 | `with_policy` | актуальная политика принята |
 | `marketing_opt_in` | есть отдельное согласие на маркетинговые сообщения текущей версии |
-| `marketing_ready` | отдельное маркетинговое согласие и согласие на ПДн текущих версий, бот доступен, нет ручного стоп-листа и `is_internal` |
+| `marketing_ready` | отдельное маркетинговое согласие, согласие на ПДн и акцепт пользовательского соглашения текущих версий; бот доступен, нет ручного стоп-листа и `is_internal` |
 | `vip_access` | `vip == true`, то есть доступ, а не подтверждённая покупка |
 | `active_7` / `active_30` | `last_seen` ≤ 7 / 30 дней |
 | `sleeping` | `last_seen` > 30 дней |
@@ -184,3 +185,4 @@ Retention: **365 дней**, максимум **20 000 записей**. Дос�
 | 2026-08-15 | Убраны Zenclass-поля и индексы; API-эндпоинты SmartBotPro удалены; fastapi/uvicorn убраны из зависимостей |
 | 2026-08-26 | consent_log, marketing_opt_out_at, start_param, re-consent по policy_version, расширенный CSV; tags убран |
 | 2026-08-31 | согласия и ссылки переведены на опубликованные документы maranius.ru; разделены версии ПДн и маркетинга, журнал дополнен документом и активным действием |
+| 2026-08-31 | доступ требует раздельных: акцепта пользовательского соглашения и согласия на ПДн; акцепт версионируется и журналируется отдельно |

@@ -24,6 +24,8 @@ class ProfileKeyboardTests(unittest.TestCase):
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
                 "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-15T00:00:00Z",
+                "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
                 "marketing_opt_in": False,
             }
         }
@@ -39,6 +41,8 @@ class ProfileKeyboardTests(unittest.TestCase):
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
                 "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-15T00:00:00Z",
+                "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
                 "marketing_opt_in": True,
                 "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
             }
@@ -60,6 +64,9 @@ class ProfileStatusTests(unittest.TestCase):
             "marketing_opt_in_at": "2026-08-02T12:00:00Z",
             "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
             "policy_accepted_at": "2026-08-01T10:00:00Z",
+            "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            "user_agreement_accepted_at": "2026-08-01T10:00:00Z",
+            "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
         }
         text = profile_handlers.format_status_html(
             row,
@@ -69,6 +76,7 @@ class ProfileStatusTests(unittest.TestCase):
         self.assertIn("VIP-доступ", text)
         self.assertIn("активирован VIP-код", text)
         self.assertIn("подписаны", text)
+        self.assertIn("Пользовательское соглашение", text)
         self.assertIn("Курс ангелов", text)
 
     def test_profile_subs_keyboard_toggle(self):

@@ -54,11 +54,39 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
             await bot.start(update, context)
 
         save_profile.assert_not_awaited()
-        show_gate.assert_awaited_once_with(update, context)
+        show_gate.assert_awaited_once_with(update, context, users={}, user_id=42)
         self.assertEqual(context.user_data["pending_action"], "start")
         update.effective_message.reply_text.assert_not_awaited()
 
     async def test_user_with_policy_gets_normal_start(self):
+        update = self.make_update()
+        context = SimpleNamespace(
+            user_data={},
+            args=[],
+            bot=SimpleNamespace(set_chat_menu_button=AsyncMock()),
+        )
+        users = {
+            "42": {
+                "id": 42,
+                "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-15T00:00:00Z",
+                "user_agreement_version": bot.user_registry.USER_AGREEMENT_VERSION,
+            }
+        }
+
+        with (
+            patch.object(bot, "_load_users", return_value=users),
+            patch.object(bot, "ensure_user_saved", new=AsyncMock()) as save_profile,
+            patch.object(bot, "_save_users", new=MagicMock()),
+        ):
+            await bot.start(update, context)
+
+        save_profile.assert_awaited_once_with(update, bot=context.bot, force=False)
+        update.effective_message.reply_text.assert_awaited_once()
+        context.bot.set_chat_menu_button.assert_awaited_once()
+
+    async def test_user_with_personal_data_consent_but_no_terms_is_gated(self):
         update = self.make_update()
         context = SimpleNamespace(
             user_data={},
@@ -76,13 +104,15 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(bot, "_load_users", return_value=users),
             patch.object(bot, "ensure_user_saved", new=AsyncMock()) as save_profile,
-            patch.object(bot, "_save_users", new=MagicMock()),
+            patch.object(
+                bot.consent_handlers, "show_policy_gate", new=AsyncMock()
+            ) as show_gate,
         ):
             await bot.start(update, context)
 
-        save_profile.assert_awaited_once_with(update, bot=context.bot, force=False)
-        update.effective_message.reply_text.assert_awaited_once()
-        context.bot.set_chat_menu_button.assert_awaited_once()
+        save_profile.assert_not_awaited()
+        show_gate.assert_awaited_once_with(update, context, users=users, user_id=42)
+        self.assertEqual(context.user_data["pending_action"], "start")
 
     async def test_pending_start_continues_after_consent(self):
         update = self.make_update()
@@ -93,7 +123,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
 
         start_handler.assert_awaited_once_with(update, context)
 
-    async def test_policy_acceptance_waits_for_marketing_choice_before_start(self):
+    async def test_personal_data_consent_waits_for_user_agreement_before_start(self):
         users = {}
         saved = {}
         query = SimpleNamespace(
@@ -125,11 +155,98 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
             saved["42"]["policy_version"],
             bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
         )
+        self.assertFalse(bot.user_registry.has_current_access(saved, 42))
         log_kwargs = self.mock_consent_log_append.await_args.kwargs
         self.assertEqual(log_kwargs["document"], "personal-data-consent")
         self.assertEqual(log_kwargs["action"], ui.CB_POLICY_ACCEPT)
         self.assertNotIn("username", saved["42"])
         self.assertNotIn("first_name", saved["42"])
+        query.message.reply_text.assert_awaited_once_with(
+            ui.MSG_POLICY_GATE,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=ui.get_policy_gate_keyboard(
+                user_agreement_accepted=False,
+                personal_data_consent_accepted=True,
+            ),
+        )
+
+    async def test_second_required_action_shows_marketing_offer(self):
+        users = {
+            "42": {
+                "id": 42,
+                "policy_accepted_at": "2026-08-15T00:00:00Z",
+                "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            }
+        }
+        query = SimpleNamespace(
+            data=ui.CB_USER_AGREEMENT_ACCEPT,
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+            message=SimpleNamespace(reply_text=AsyncMock()),
+        )
+        context = SimpleNamespace(user_data={"pending_action": "start"})
+
+        pending = await consent_handlers.consent_callback(
+            update=SimpleNamespace(callback_query=query),
+            context=context,
+            users_lock=AsyncLock(),
+            load_users=lambda: users,
+            save_users=lambda _value: None,
+        )
+
+        self.assertIsNone(pending)
+        self.assertTrue(bot.user_registry.has_current_access(users, 42))
+        log_kwargs = self.mock_consent_log_append.await_args.kwargs
+        self.assertEqual(log_kwargs["document"], "user-agreement")
+        self.assertEqual(log_kwargs["action"], ui.CB_USER_AGREEMENT_ACCEPT)
+        query.message.reply_text.assert_awaited_once_with(
+            ui.MSG_MARKETING_OFFER,
+            parse_mode="HTML",
+            reply_markup=ui.get_marketing_offer_keyboard(),
+        )
+
+    async def test_user_agreement_then_personal_data_consent_shows_marketing_offer(self):
+        users = {}
+        context = SimpleNamespace(user_data={"pending_action": "start"})
+        agreement_query = SimpleNamespace(
+            data=ui.CB_USER_AGREEMENT_ACCEPT,
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+            message=SimpleNamespace(reply_text=AsyncMock()),
+        )
+        await consent_handlers.consent_callback(
+            update=SimpleNamespace(callback_query=agreement_query),
+            context=context,
+            users_lock=AsyncLock(),
+            load_users=lambda: users,
+            save_users=lambda _value: None,
+        )
+
+        self.assertTrue(bot.user_registry.has_current_user_agreement(users, 42))
+        self.assertFalse(bot.user_registry.has_current_access(users, 42))
+
+        personal_data_query = SimpleNamespace(
+            data=ui.CB_POLICY_ACCEPT,
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+            message=SimpleNamespace(reply_text=AsyncMock()),
+        )
+        pending = await consent_handlers.consent_callback(
+            update=SimpleNamespace(callback_query=personal_data_query),
+            context=context,
+            users_lock=AsyncLock(),
+            load_users=lambda: users,
+            save_users=lambda _value: None,
+        )
+
+        self.assertIsNone(pending)
+        self.assertTrue(bot.user_registry.has_current_access(users, 42))
+        personal_data_query.message.reply_text.assert_awaited_once_with(
+            ui.MSG_MARKETING_OFFER,
+            parse_mode="HTML",
+            reply_markup=ui.get_marketing_offer_keyboard(),
+        )
 
     async def test_marketing_choice_continues_pending_start(self):
         users = {
@@ -137,6 +254,8 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
                 "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-15T00:00:00Z",
+                "user_agreement_version": bot.user_registry.USER_AGREEMENT_VERSION,
             }
         }
         query = SimpleNamespace(
@@ -170,6 +289,8 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
                 "id": 42,
                 "policy_accepted_at": "2026-08-15T00:00:00Z",
                 "policy_version": bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-15T00:00:00Z",
+                "user_agreement_version": bot.user_registry.USER_AGREEMENT_VERSION,
             }
         }
         query = SimpleNamespace(data=ui.CB_MARKETING_NO, from_user=SimpleNamespace(id=42), answer=AsyncMock(), message=SimpleNamespace(reply_text=AsyncMock()))
@@ -201,7 +322,11 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
         query.message.reply_text.assert_awaited_once_with(
             ui.MSG_POLICY_GATE,
             parse_mode="HTML",
-            reply_markup=ui.get_policy_gate_keyboard(),
+            disable_web_page_preview=True,
+            reply_markup=ui.get_policy_gate_keyboard(
+                user_agreement_accepted=False,
+                personal_data_consent_accepted=False,
+            ),
         )
 
     async def test_handle_text_does_not_save_profile_without_policy(self):

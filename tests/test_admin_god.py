@@ -16,6 +16,8 @@ class AdminSegmentsTests(unittest.TestCase):
             "marketing_consent_version": user_registry.MARKETING_CONSENT_VERSION,
             "policy_accepted_at": "2026-08-01T00:00:00Z",
             "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+            "user_agreement_accepted_at": "2026-08-01T00:00:00Z",
+            "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
             "bot_status": "active",
             "admin_blocked": False,
             "is_internal": False,
@@ -24,6 +26,7 @@ class AdminSegmentsTests(unittest.TestCase):
         for field, value in (
             ("marketing_opt_in", False),
             ("policy_accepted_at", ""),
+            ("user_agreement_accepted_at", ""),
             ("bot_status", "blocked"),
             ("admin_blocked", True),
             ("is_internal", True),

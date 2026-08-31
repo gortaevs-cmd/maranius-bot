@@ -278,11 +278,14 @@ MSG_POLICY_GATE = (
     f'• <a href="{URL_PRIVACY_POLICY}">Политика конфиденциальности</a>\n'
     f'• <a href="{URL_PERSONAL_DATA_CONSENT}">Согласие на обработку персональных данных</a>\n'
     f'• <a href="{URL_USER_AGREEMENT}">Пользовательское соглашение</a>\n\n'
-    "Нажимая кнопку ниже, вы совершаете отдельное активное действие — даёте согласие "
-    "на обработку персональных данных для работы бота."
+    "Для доступа подтвердите два самостоятельных действия: примите пользовательское "
+    "соглашение и отдельно дайте согласие на обработку персональных данных."
 )
 
-MSG_POLICY_ACCEPTED = "Спасибо. Согласие на обработку персональных данных зафиксировано — можно пользоваться ботом."
+MSG_POLICY_ACCEPTED = (
+    "Спасибо. Принятие пользовательского соглашения и согласие на обработку "
+    "персональных данных зафиксированы — можно пользоваться ботом."
+)
 MSG_POLICY_CONTINUE = "Продолжай с нужного раздела в меню."
 MSG_ACCESS_RESTRICTED = "Доступ ограничен."
 
@@ -317,6 +320,7 @@ BTN_PROFILE_STATUS = "📋 Статус"
 BTN_PROFILE_SUBS = "📬 Подписки"
 
 CB_POLICY_ACCEPT = "consent:policy:accept"
+CB_USER_AGREEMENT_ACCEPT = "consent:agreement:accept"
 CB_MARKETING_YES = "consent:marketing:yes"
 CB_MARKETING_NO = "consent:marketing:no"
 CB_MARKETING_TOGGLE_ON = "consent:marketing:on"
@@ -324,6 +328,7 @@ CB_MARKETING_TOGGLE_OFF = "consent:marketing:off"
 CB_MARKETING_UNSUB = "consent:marketing:unsub"
 
 BTN_POLICY_ACCEPT = "✅ Даю согласие на обработку данных"
+BTN_USER_AGREEMENT_ACCEPT = "✅ Принимаю пользовательское соглашение"
 BTN_MARKETING_YES = "📬 Да, хочу получать новости"
 BTN_MARKETING_NO = "Не сейчас"
 BTN_MARKETING_ON = "📬 Подписаться на рассылку"
@@ -553,7 +558,7 @@ ADMIN_USER_CARD = (
     "Username: {username}\n"
     "VIP-доступ: <b>{vip}</b> ({vip_source})\n"
     "Бот: <b>{bot_status}</b> · ручной стоп-лист: <b>{admin_blocked}</b>\n"
-    "Согласие на рассылку: <b>{marketing}</b> · ПДн: <b>{policy}</b>\n"
+    "Согласие на рассылку: <b>{marketing}</b> · ПДн: <b>{policy}</b> · соглашение: <b>{agreement}</b>\n"
     "Последняя активность: <code>{last_seen}</code>\n\n"
     "Выбери действие — затем потребуется основание и подтверждение."
 )
@@ -598,17 +603,32 @@ def get_admin_vip_prompt_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def get_policy_gate_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def get_policy_gate_keyboard(
+    *,
+    user_agreement_accepted: bool = False,
+    personal_data_consent_accepted: bool = False,
+) -> InlineKeyboardMarkup:
+    rows = [
         [
+            InlineKeyboardButton("Политика конфиденциальности", url=URL_PRIVACY_POLICY),
+            InlineKeyboardButton("Согласие на ПДн", url=URL_PERSONAL_DATA_CONSENT),
+        ],
+        [InlineKeyboardButton("Пользовательское соглашение", url=URL_USER_AGREEMENT)],
+    ]
+    if not user_agreement_accepted:
+        rows.append(
             [
-                InlineKeyboardButton("Политика конфиденциальности", url=URL_PRIVACY_POLICY),
-                InlineKeyboardButton("Согласие на ПДн", url=URL_PERSONAL_DATA_CONSENT),
-            ],
-            [InlineKeyboardButton("Пользовательское соглашение", url=URL_USER_AGREEMENT)],
-            [InlineKeyboardButton(BTN_POLICY_ACCEPT, callback_data=CB_POLICY_ACCEPT)],
-        ]
-    )
+                InlineKeyboardButton(
+                    BTN_USER_AGREEMENT_ACCEPT,
+                    callback_data=CB_USER_AGREEMENT_ACCEPT,
+                )
+            ]
+        )
+    if not personal_data_consent_accepted:
+        rows.append(
+            [InlineKeyboardButton(BTN_POLICY_ACCEPT, callback_data=CB_POLICY_ACCEPT)]
+        )
+    return InlineKeyboardMarkup(rows)
 
 
 def get_marketing_offer_keyboard() -> InlineKeyboardMarkup:

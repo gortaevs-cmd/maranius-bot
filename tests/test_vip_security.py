@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import bot
-from integrations import vip_codes
+from integrations import user_registry, vip_codes
 
 
 class VipCodeTests(unittest.IsolatedAsyncioTestCase):
@@ -63,14 +63,24 @@ class AdminGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await bot._admin_guard(update))
         message.reply_text.assert_awaited_once()
 
-    async def test_seed_admin_passes_admin_guard(self):
+    async def test_seed_admin_passes_admin_guard_after_required_acceptances(self):
         admin_id = next(iter(bot.SEED_ADMIN_IDS))
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=admin_id),
             effective_message=SimpleNamespace(reply_text=AsyncMock()),
             callback_query=None,
         )
-        self.assertTrue(await bot._admin_guard(update))
+        users = {
+            str(admin_id): {
+                "id": admin_id,
+                "policy_accepted_at": "2026-08-31T00:00:00Z",
+                "policy_version": user_registry.PERSONAL_DATA_CONSENT_VERSION,
+                "user_agreement_accepted_at": "2026-08-31T00:00:00Z",
+                "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
+            }
+        }
+        with patch.object(bot, "_load_users", return_value=users):
+            self.assertTrue(await bot._admin_guard(update))
 
 
 if __name__ == "__main__":

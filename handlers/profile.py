@@ -67,11 +67,23 @@ def format_status_html(
     else:
         marketing_block = "• не подписаны"
 
-    if row.get("policy_accepted_at"):
+    if (
+        row.get("policy_accepted_at")
+        and row.get("policy_version") == user_registry.PERSONAL_DATA_CONSENT_VERSION
+    ):
         policy_date = _fmt_date(str(row.get("policy_accepted_at") or ""))
         policy_block = f"• принято (с {policy_date})"
     else:
         policy_block = "• не принято"
+
+    if (
+        row.get("user_agreement_accepted_at")
+        and row.get("user_agreement_version") == user_registry.USER_AGREEMENT_VERSION
+    ):
+        agreement_date = _fmt_date(str(row.get("user_agreement_accepted_at") or ""))
+        agreement_block = f"• принято (с {agreement_date})"
+    else:
+        agreement_block = "• не принято"
 
     course_lines = _course_lines(courses)
     courses_text = "\n".join(course_lines)
@@ -84,6 +96,8 @@ def format_status_html(
         f"{marketing_block}\n\n"
         "<b>Обработка персональных данных</b>:\n"
         f"{policy_block}\n\n"
+        "<b>Пользовательское соглашение</b>:\n"
+        f"{agreement_block}\n\n"
         "<b>Курсы и практики</b>:\n"
         f"{courses_text}"
     )

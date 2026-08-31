@@ -175,14 +175,14 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
     """
     Обновить/добавить данные пользователя в users.json.
     Returns True если пользователь новый (первый визит).
-    Без force профиль не пишется до принятия актуальной политики (кроме seed-admin).
+    Без force профиль не пишется до принятия пользовательского соглашения
+    и актуального согласия на ПДн.
     """
     user = update.effective_user
     if not user:
         return False
-    if not force and user.id not in SEED_ADMIN_IDS:
-        if not user_registry.has_current_policy(_load_users(), user.id):
-            return False
+    if not force and not user_registry.has_current_access(_load_users(), user.id):
+        return False
     uid = str(user.id)
     # После принятия политики уже может быть минимальная запись {id, policy_*}.
     # Новым считаем профиль, которому ещё не задавали first_seen.
@@ -582,14 +582,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # До согласия не сохраняем Telegram-профиль или параметр deep-link нового
     # пользователя. Параметр /start может быть данными для аналитики и пишется
     # только после отдельного активного согласия.
-    # Seed-админ — внутренний служебный аккаунт.
-    if user.id not in SEED_ADMIN_IDS:
-        async with _users_lock:
-            has_policy = user_registry.has_current_policy(_load_users(), user.id)
-        if not has_policy:
-            context.user_data["pending_action"] = "start"
-            await consent_handlers.show_policy_gate(update, context)
-            return
+    async with _users_lock:
+        users = _load_users()
+        has_access = user_registry.has_current_access(users, user.id)
+    if not has_access:
+        context.user_data["pending_action"] = "start"
+        await consent_handlers.show_policy_gate(
+            update, context, users=users, user_id=user.id
+        )
+        return
 
     await ensure_user_saved(update, bot=context.bot, force=user.id in SEED_ADMIN_IDS)
     if getattr(context, "args", None):
@@ -993,7 +994,7 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def show_policy(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     users = _load_users()
     user = update.effective_user
-    with_marketing = bool(user and user_registry.has_current_policy(users, user.id))
+    with_marketing = bool(user and user_registry.has_current_access(users, user.id))
     message = update.effective_message
     if not message:
         return
@@ -1400,12 +1401,30 @@ def _user_stats() -> Dict[str, int]:
 
 
 async def _admin_guard(update: Update) -> bool:
-    """Guard для inline-кнопок /god: только seed-админы."""
+    """Guard для /god: seed-админы с принятыми обязательными документами."""
     user = update.effective_user
     if not user and update.callback_query:
         user = update.callback_query.from_user
     if user and user.id in SEED_ADMIN_IDS:
-        return True
+        users = _load_users()
+        if user_registry.has_current_access(users, user.id):
+            return True
+        message = update.effective_message
+        if message:
+            await message.reply_text(
+                ui.MSG_POLICY_GATE,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=ui.get_policy_gate_keyboard(
+                    user_agreement_accepted=user_registry.has_current_user_agreement(
+                        users, user.id
+                    ),
+                    personal_data_consent_accepted=user_registry.has_current_policy(
+                        users, user.id
+                    ),
+                ),
+            )
+        return False
     message = update.effective_message
     if message:
         await message.reply_text(ui.ADMIN_DENIED)
@@ -1625,6 +1644,7 @@ def _admin_user_card_text(uid: int, row: Dict[str, Any]) -> str:
         admin_blocked="да" if row.get("admin_blocked") else "нет",
         marketing="да" if user_registry.has_current_marketing_consent(_load_users(), uid) else "нет",
         policy="да" if user_registry.has_current_policy(_load_users(), uid) else "нет",
+        agreement="да" if user_registry.has_current_user_agreement(_load_users(), uid) else "нет",
         last_seen=html.escape(str(row.get("last_seen") or "—")),
     )
 
@@ -2299,7 +2319,7 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if data == ui.CB_POLICY:
         user = query.from_user
         users = _load_users()
-        with_marketing = bool(user and user_registry.has_current_policy(users, user.id))
+        with_marketing = bool(user and user_registry.has_current_access(users, user.id))
         await _edit_or_reply(
             msg,
             ui.MSG_POLICY_FULL,
@@ -2536,9 +2556,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if user_registry.is_admin_blocked(users, user.id):
                 await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return
-            if not user_registry.has_current_policy(users, user.id):
+            if not user_registry.has_current_access(users, user.id):
                 context.user_data["pending_action"] = "marketing_subscribe"
-                await consent_handlers.show_policy_gate(update, context)
+                await consent_handlers.show_policy_gate(
+                    update, context, users=users, user_id=user.id
+                )
                 return
         context.user_data["pending_action"] = "marketing_subscribe"
         await consent_handlers.show_marketing_offer(update)
