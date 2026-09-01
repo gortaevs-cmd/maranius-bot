@@ -6,6 +6,9 @@ users.json
 admins.json
 admin_audit.json
 consent_log.json
+legacy_inactive_users.json
+legacy_migration_pending.json
+legacy_migration_last_result.json
 events.json
 monitored_chats.json
 data/platform_users.json

@@ -37,6 +37,7 @@ from integrations import (
     dice_content,
     ewasml_services,
     inbox as inbox_mod,
+    legacy_contacts,
     platform_db,
     user_registry,
     vip_codes,
@@ -205,6 +206,21 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
             users[uid]["vip"] = True
         _save_users(users)
 
+    # Users from the separately stored legacy-inactive roster are activated
+    # only after the normal consent gate has allowed profile saving above.
+    reactivated = None
+    if bot:
+        reactivated = await legacy_contacts.claim_returning_inactive_user(user.id)
+        if reactivated:
+            await admin_alerts.notify_legacy_contact_return(
+                bot,
+                SEED_ADMIN_IDS,
+                user_id=user.id,
+                username=user.username,
+                first_name=user.first_name or "",
+                source=str(reactivated.get("source") or "legacy import"),
+            )
+
     name = (user.first_name or "") + (" " + (user.last_name or "") if user.last_name else "")
     if not name.strip():
         name = user.username or None
@@ -217,7 +233,7 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
     if chat and chat.type in ("group", "supergroup"):
         _known_chats.add(chat.id)
 
-    if is_new and bot:
+    if is_new and bot and not reactivated:
         await admin_alerts.notify_new_subscriber(
             bot,
             SEED_ADMIN_IDS,
@@ -2711,10 +2727,71 @@ async def _notify_storage_recoveries(context) -> None:
                 print(f"Storage recovery notify {admin_id}: {exc!r}")
 
 
+def _apply_pending_legacy_migration() -> Optional[Dict[str, Any]]:
+    """Consume a staged legacy roster before polling starts.
+
+    The import runs in the bot process, before Telegram updates are handled, so
+    it cannot race with a normal users.json update.  The staged ID-only
+    manifest is retained together with its result and then removed from the
+    pending path to make the operation one-time.
+    """
+    pending_path = legacy_contacts.PENDING_MIGRATION_FILE
+    if not pending_path.is_file():
+        return None
+
+    manifest = load_json(pending_path, None)
+    if not isinstance(manifest, dict):
+        raise ValueError("Legacy migration manifest must be an object")
+    required_keys = ("source", "active_user_ids", "vip_user_ids", "inactive_user_ids")
+    if any(key not in manifest for key in required_keys):
+        raise ValueError("Legacy migration manifest is missing required fields")
+
+    users = _load_users()
+    inactive_store = legacy_contacts.load_inactive_store()
+    result = legacy_contacts.apply_legacy_migration(
+        users,
+        inactive_store,
+        active_user_ids=manifest["active_user_ids"],
+        vip_user_ids=manifest["vip_user_ids"],
+        inactive_user_ids=manifest["inactive_user_ids"],
+        source=str(manifest["source"]),
+    )
+
+    # Both files use atomic replacement and are backed up on every subsequent
+    # write.  Save the inactive queue first; a failed second write is safe to
+    # rerun because the migration merge is idempotent.
+    legacy_contacts.save_inactive_store(inactive_store)
+    _save_users(users)
+    completed = {
+        "manifest": manifest,
+        "result": result,
+        "applied_at": user_registry.now_iso(),
+    }
+    save_json(legacy_contacts.LAST_MIGRATION_FILE, completed, trailing_newline=True)
+    pending_path.unlink()
+    return completed
+
+
 async def _maranius_post_init(application: Application) -> None:
     """Сброс webhook (иначе polling конфликтует) и явный лог, какой бот подключён."""
     ensure_seed_admins()
     ensure_seed_vip()
+    migration = _apply_pending_legacy_migration()
+    if migration:
+        result = migration["result"]
+        await admin_alerts.notify_seed_admins(
+            application.bot,
+            SEED_ADMIN_IDS,
+            (
+                "✅ <b>Миграция старой базы завершена</b>\n"
+                f"Активный пул: <b>{len(migration['manifest']['active_user_ids'])}</b>\n"
+                f"VIP: <b>{len(migration['manifest']['vip_user_ids'])}</b>\n"
+                f"Отдельный список: <b>{len(migration['manifest']['inactive_user_ids'])}</b>\n"
+                f"Новых активных записей: <b>{result['active_created']}</b>\n"
+                f"Выдано VIP: <b>{result['vip_granted']}</b>\n"
+                f"Добавлено в отдельный список: <b>{result['inactive_stored']}</b>"
+            ),
+        )
     migrated = await inbox_mod.migrate_legacy_unknown_csv()
     if migrated:
         print(f"Inbox: мигрировано из unknown_angelic.csv — {migrated} записей")

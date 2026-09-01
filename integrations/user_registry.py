@@ -65,6 +65,8 @@ _PRESERVE_KEYS = (
     "marketing_opt_out_action",
     "start_param",
     "start_param_at",
+    "legacy_import_source",
+    "legacy_imported_at",
 )
 
 

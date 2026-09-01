@@ -69,6 +69,29 @@ async def notify_new_subscriber(
     await notify_seed_admins(bot, seed_admin_ids, text)
 
 
+async def notify_legacy_contact_return(
+    bot: Bot,
+    seed_admin_ids: Set[int],
+    *,
+    user_id: int,
+    username: Optional[str],
+    first_name: str,
+    source: str,
+) -> None:
+    """Notify once when a legacy-inactive contact returns after consent."""
+    un = f"@{html.escape(username)}" if username else "—"
+    name = html.escape(first_name) if first_name else "—"
+    text = (
+        "↩️ <b>Вернулся пользователь из отдельного списка</b>\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Username: {un}\n"
+        f"Имя: {name}\n"
+        f"Источник: {html.escape(source[:120])}\n\n"
+        "Профиль активирован после принятия обязательных документов."
+    )
+    await notify_seed_admins(bot, seed_admin_ids, text)
+
+
 async def notify_inbox_entry(
     bot: Bot,
     seed_admin_ids: Set[int],
