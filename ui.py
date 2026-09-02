@@ -193,6 +193,7 @@ MSG_MORE = (
     "🌙 <b>Луна</b> — фаза, лунные сутки и даты новолуния и полнолуния.\n"
     "🙌 <b>Услуги</b> — целительские практики, их описания и запись на сессию.\n"
     "🎓 <b>Курсы/Практики</b> — онлайн-программы и практики с кристаллами Крайона.\n"
+    "📱 <b>Социальные сети</b> — официальные страницы Maranius (скоро).\n"
     "ℹ️ <b>Инфо / FAQ</b> — как пользоваться ботом и ответы на частые вопросы.\n"
     "🛡 <b>Политика</b> — документы об обработке персональных данных.\n"
     "⚙️ <b>Настройки профиля</b> — статус подписок и управление рассылкой.\n\n"
@@ -230,6 +231,11 @@ MSG_LEARNING = (
     "💎 <b>Путь Света через кристаллы Крайона</b>\n"
     "Практики 7 · 21 · 33 дня — ежедневные послания и глубокая работа с кристаллами.\n\n"
     f'Продолжить в боте → <a href="{URL_KRYON_BOT}">@KryonCrystalsBot</a>'
+)
+
+MSG_SOCIAL_NETWORKS_STUB = (
+    "<b>📱 Социальные сети</b>\n\n"
+    "Скоро здесь появятся ссылки на официальные страницы Maranius."
 )
 
 MSG_INFO_FAQ = (
@@ -356,6 +362,7 @@ CB_WEATHER = "more:weather"
 CB_MOON = "more:moon"
 CB_SERVICES = "more:services"
 CB_LEARNING = "more:learning"
+CB_SOCIAL_NETWORKS = "more:social"
 CB_INFO = "more:info"
 CB_POLICY = "more:policy"
 
@@ -465,7 +472,7 @@ ADMIN_VIP_SUMMARY = (
 )
 ADMIN_VIP_ADD_PROMPT = (
     "Вставь коды <b>одним сообщением</b> — по одному на строку.\n"
-    "Строки с # в начале игнорируются. Затем укажи основание и подтверди операцию."
+    "Строки с # в начале игнорируются. Затем проверь список и подтверди операцию."
 )
 ADMIN_VIP_ADD_RESULT = (
     "Готово: добавлено <b>{added}</b>, дублей <b>{dup}</b>, пустых <b>{skipped}</b>.\n"
@@ -482,8 +489,8 @@ ADMIN_VIP_IMPORT_RESULT = (
 )
 ADMIN_BATCH_REASON_PROMPT = "Укажи основание операции одним сообщением (от 3 до 200 символов)."
 ADMIN_BATCH_CODE_PREVIEW = (
-    "Коды: будет добавлено <b>{added}</b>, дублей <b>{dup}</b>, пустых <b>{skipped}</b>.\n"
-    "Основание: <code>{reason}</code>\n\nПодтвердить?"
+    "Коды: будет добавлено <b>{added}</b>, дублей <b>{dup}</b>, пустых <b>{skipped}</b>.\n\n"
+    "Подтвердить?"
 )
 ADMIN_BATCH_IMPORT_PREVIEW = (
     "Импорт VIP-доступа: будет выдано <b>{granted}</b>, уже VIP <b>{skipped}</b>, "
@@ -935,6 +942,7 @@ def get_more_inline_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Услуги", callback_data=CB_SERVICES),
                 InlineKeyboardButton("Курсы/Практики", callback_data=CB_LEARNING),
             ],
+            [InlineKeyboardButton("📱 Социальные сети", callback_data=CB_SOCIAL_NETWORKS)],
             [
                 InlineKeyboardButton("Инфо / FAQ", callback_data=CB_INFO),
                 InlineKeyboardButton("Политика", callback_data=CB_POLICY),

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import bot
+from handlers import vip as vip_handlers
 from integrations import user_registry, vip_codes
 
 
@@ -39,6 +40,41 @@ class VipCodeTests(unittest.IsolatedAsyncioTestCase):
         await vip_codes.add_codes_bulk("USED")
         preview = await vip_codes.preview_codes_bulk("NEW\nUSED\n\n# comment\nNEW")
         self.assertEqual(preview, (1, 2, 1))
+
+    async def test_successful_redemption_notifies_admin_with_entered_code(self):
+        await vip_codes.add_codes_bulk("VIP-CODE")
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=7, username="vip_user", first_name="Вера"),
+            message=message,
+        )
+        context = SimpleNamespace(user_data={"awaiting_vip_code": True})
+        grant_vip = AsyncMock()
+        show_vip_home = AsyncMock()
+        notify_success = AsyncMock()
+
+        handled = await vip_handlers.try_vip_code(
+            update,
+            context,
+            "  Vip-Code  ",
+            is_vip=lambda _: False,
+            grant_vip=grant_vip,
+            show_vip_home=show_vip_home,
+            notify_wrong=AsyncMock(),
+            protect_kwargs={},
+            notify_success=notify_success,
+        )
+
+        self.assertTrue(handled)
+        grant_vip.assert_awaited_once_with(7)
+        notify_success.assert_awaited_once_with(
+            context,
+            user_id=7,
+            username="vip_user",
+            first_name="Вера",
+            code="  Vip-Code  ",
+        )
+        self.assertNotIn("awaiting_vip_code", context.user_data)
 
 
 class AdminGuardTests(unittest.IsolatedAsyncioTestCase):

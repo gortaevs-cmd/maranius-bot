@@ -113,6 +113,7 @@ async def try_vip_code(
     notify_duplicate: Optional[Callable[..., Any]] = None,
     protect_kwargs: Dict[str, Any],
     main_keyboard_for: Optional[Callable[[int], Any]] = None,
+    notify_success: Optional[Callable[..., Any]] = None,
 ) -> bool:
     user = update.effective_user
     if not user or not update.message:
@@ -135,6 +136,14 @@ async def try_vip_code(
             await vip_codes.rollback_redemption(raw_code, user_id=user.id)
             raise
         context.user_data.pop("awaiting_vip_code", None)
+        if notify_success:
+            await notify_success(
+                context,
+                user_id=user.id,
+                username=user.username,
+                first_name=user.first_name or "",
+                code=raw_code,
+            )
         await update.message.reply_text(
             ui.MSG_VIP_CODE_OK,
             parse_mode="HTML",

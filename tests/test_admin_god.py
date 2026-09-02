@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import bot
+import ui
 from integrations import admin_audit, consent_log, user_registry, vip_codes
 
 
@@ -97,7 +98,6 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
                     "admin_batch": {
                         "kind": "vip_codes",
                         "raw": "ONE\nTWO",
-                        "reason": "Коды для курса",
                     }
                 }
             )
@@ -108,7 +108,27 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await vip_codes.counts(), (2, 0))
                 rows = await admin_audit.recent(root / "admin_audit.json")
             self.assertEqual(rows[0]["action"], "vip_codes_added")
+            self.assertEqual(rows[0]["reason"], bot.VIP_CODES_AUDIT_REASON)
             message.reply_text.assert_awaited_once()
+
+    async def test_adding_codes_moves_straight_to_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            message = SimpleNamespace(reply_text=AsyncMock())
+            update = SimpleNamespace(effective_message=message)
+            context = SimpleNamespace(user_data={"admin_mode": "vip_add"})
+            with patch.object(vip_codes, "CODES_FILE", Path(tmp) / "codes.json"):
+                await bot._admin_prepare_vip_codes(update, context, "ONE\nTWO")
+
+            self.assertNotIn("admin_mode", context.user_data)
+            batch = context.user_data["admin_batch"]
+            self.assertEqual(batch["reason"], bot.VIP_CODES_AUDIT_REASON)
+            self.assertEqual(batch["preview"], {"added": 2, "duplicates": 0, "skipped": 0})
+            self.assertEqual(
+                message.reply_text.call_args.args[0],
+                ui.ADMIN_BATCH_CODE_PREVIEW.format(added=2, dup=0, skipped=0),
+            )
+            self.assertEqual(message.reply_text.call_args.kwargs["parse_mode"], "HTML")
+            self.assertIsNotNone(message.reply_text.call_args.kwargs["reply_markup"])
 
 
 if __name__ == "__main__":

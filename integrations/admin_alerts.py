@@ -69,6 +69,28 @@ async def notify_new_subscriber(
     await notify_seed_admins(bot, seed_admin_ids, text)
 
 
+async def notify_vip_code_redeemed(
+    bot: Bot,
+    seed_admin_ids: Set[int],
+    *,
+    user_id: int,
+    username: Optional[str],
+    first_name: str,
+    code: str,
+) -> None:
+    """Сообщить seed-админам об успешной активации VIP-кода."""
+    un = f"@{html.escape(username)}" if username else "—"
+    name = html.escape(first_name) if first_name else "—"
+    text = (
+        "✅ <b>Новый VIP-пользователь</b>\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Username: {un}\n"
+        f"Имя: {name}\n"
+        f"Введённый VIP-код: <code>{html.escape(code.strip()[:120])}</code>"
+    )
+    await notify_seed_admins(bot, seed_admin_ids, text)
+
+
 async def notify_legacy_contact_return(
     bot: Bot,
     seed_admin_ids: Set[int],

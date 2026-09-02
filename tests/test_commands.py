@@ -20,6 +20,16 @@ class BotCommandsTests(unittest.TestCase):
         )
         self.assertIn(ui.URL_CATALOG, ui.MSG_STORE_STUB)
 
+    def test_more_menu_includes_social_networks_placeholder(self):
+        buttons = [
+            button
+            for row in ui.get_more_inline_keyboard().inline_keyboard
+            for button in row
+        ]
+        social = next(button for button in buttons if button.callback_data == ui.CB_SOCIAL_NETWORKS)
+        self.assertEqual(social.text, "📱 Социальные сети")
+        self.assertIn("Социальные сети", ui.MSG_SOCIAL_NETWORKS_STUB)
+
     def test_every_inline_button_uses_a_registered_callback_family(self):
         keyboards = [
             ui.get_policy_gate_keyboard(), ui.get_marketing_offer_keyboard(),

@@ -58,6 +58,7 @@ from handlers import vip as vip_handlers
 
 # Суперюзеры стенда — режим бога и VIP навсегда без кода в чат.
 SEED_ADMIN_IDS: Set[int] = {186758977}
+VIP_CODES_AUDIT_REASON = "Добавление VIP-кодов через админ-панель"
 
 
 def _main_keyboard_for(user_id: int):
@@ -1738,9 +1739,18 @@ async def _admin_prepare_vip_codes(
         "kind": "vip_codes",
         "raw": text,
         "preview": {"added": added, "duplicates": duplicates, "skipped": skipped},
+        "reason": VIP_CODES_AUDIT_REASON,
     }
-    context.user_data["admin_mode"] = "vip_codes_reason"
-    await update.effective_message.reply_text(ui.ADMIN_BATCH_REASON_PROMPT, parse_mode="HTML")
+    context.user_data.pop("admin_mode", None)
+    await update.effective_message.reply_text(
+        ui.ADMIN_BATCH_CODE_PREVIEW.format(
+            added=added,
+            dup=duplicates,
+            skipped=skipped,
+        ),
+        parse_mode="HTML",
+        reply_markup=ui.get_admin_batch_confirm_keyboard(),
+    )
 
 
 async def _admin_prepare_vip_import(
@@ -1813,7 +1823,7 @@ async def _admin_confirm_batch(update: Update, context: ContextTypes.DEFAULT_TYP
         await _audit_admin_action(
             update,
             action="vip_codes_added",
-            reason=batch["reason"],
+            reason=batch.get("reason") or VIP_CODES_AUDIT_REASON,
             meta={"added": added, "duplicates": duplicates, "skipped": skipped},
         )
         await message.reply_text(
@@ -2266,6 +2276,13 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ui.get_back_to_more_keyboard(),
         )
         return
+    if data == ui.CB_SOCIAL_NETWORKS:
+        await _edit_or_reply(
+            msg,
+            ui.MSG_SOCIAL_NETWORKS_STUB,
+            ui.get_back_to_more_keyboard(),
+        )
+        return
     if data == ui.CB_INFO:
         await _edit_or_reply(
             msg,
@@ -2371,6 +2388,24 @@ async def _notify_duplicate_vip(
         username=username,
         text=code,
         meta={"original_user_id": orig_id, "original_username": owner.get("username")},
+    )
+
+
+async def _notify_vip_code_redeemed(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    username: Optional[str],
+    first_name: str,
+    code: str,
+) -> None:
+    await admin_alerts.notify_vip_code_redeemed(
+        context.bot,
+        SEED_ADMIN_IDS,
+        user_id=user_id,
+        username=username,
+        first_name=first_name,
+        code=code,
     )
 
 
@@ -2615,9 +2650,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if admin_mode == "vip_add":
             await _admin_prepare_vip_codes(update, context, text)
             return
-        if admin_mode == "vip_codes_reason":
-            await _admin_receive_batch_reason(update, context, text)
-            return
         if admin_mode == "vip_import":
             await _admin_prepare_vip_import(update, context, text)
             return
@@ -2649,6 +2681,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             **kw,
         ),
         notify_duplicate=lambda ctx, **kw: _notify_duplicate_vip(ctx, **kw),
+        notify_success=lambda ctx, **kw: _notify_vip_code_redeemed(ctx, **kw),
         protect_kwargs=PROTECT_KWARGS,
         main_keyboard_for=_main_keyboard_for,
     ):
