@@ -26,6 +26,13 @@ class BotCommandsTests(unittest.TestCase):
         self.assertEqual(button.text, "🌐 Открыть на сайте")
         self.assertEqual(button.url, "https://maranius.ru/themes/kristally/#elixir")
 
+    def test_vip_input_mode_has_only_cancel_button(self):
+        keyboard = ui.get_admin_vip_prompt_keyboard()
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        self.assertEqual(len(buttons), 1)
+        self.assertEqual(buttons[0].text, ui.ADMIN_BTN_VIP_CANCEL)
+        self.assertEqual(buttons[0].callback_data, ui.CB_ADMIN_VIP_CANCEL)
+
     def test_more_menu_includes_social_networks_placeholder(self):
         buttons = [
             button

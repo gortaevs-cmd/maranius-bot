@@ -441,6 +441,14 @@ async def admin_vip_summary(update: Update, admin_guard) -> None:
     )
 
 
+async def _admin_edit_or_reply(message, text: str, reply_markup) -> None:
+    """Заменить текущий экран админки, не создавая дублирующую панель в чате."""
+    try:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    except Exception:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
+
 async def admin_vip_export(update: Update, admin_guard) -> None:
     message = update.effective_message
     if not message or not await admin_guard(update):
@@ -449,7 +457,6 @@ async def admin_vip_export(update: Update, admin_guard) -> None:
     await message.reply_document(
         document=InputFile(io.BytesIO(payload), filename="vip_codes.csv"),
         caption="VIP-коды (активные и отработанные)",
-        reply_markup=ui.get_admin_vip_keyboard(),
     )
 
 
@@ -458,10 +465,10 @@ async def admin_vip_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message or not await admin_guard(update):
         return
     context.user_data["admin_mode"] = "vip_add"
-    await message.reply_text(
+    await _admin_edit_or_reply(
+        message,
         ui.ADMIN_VIP_ADD_PROMPT,
-        parse_mode="HTML",
-        reply_markup=ui.get_admin_vip_prompt_keyboard(),
+        ui.get_admin_vip_prompt_keyboard(),
     )
 
 
@@ -470,8 +477,8 @@ async def admin_vip_import_prompt(update: Update, context: ContextTypes.DEFAULT_
     if not message or not await admin_guard(update):
         return
     context.user_data["admin_mode"] = "vip_import"
-    await message.reply_text(
+    await _admin_edit_or_reply(
+        message,
         ui.ADMIN_VIP_IMPORT_PROMPT,
-        parse_mode="HTML",
-        reply_markup=ui.get_admin_vip_prompt_keyboard(),
+        ui.get_admin_vip_prompt_keyboard(),
     )

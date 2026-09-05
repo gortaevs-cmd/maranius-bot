@@ -605,12 +605,10 @@ def get_back_to_more_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_admin_vip_prompt_keyboard() -> InlineKeyboardMarkup:
-    """VIP admin: отмена ввода кодов/id."""
-    rows = list(get_admin_vip_keyboard().inline_keyboard)
-    rows.append(
-        [InlineKeyboardButton(ADMIN_BTN_VIP_CANCEL, callback_data=CB_ADMIN_VIP_CANCEL)]
+    """Режим ввода VIP: доступно только прекращение текущей операции."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(ADMIN_BTN_VIP_CANCEL, callback_data=CB_ADMIN_VIP_CANCEL)]]
     )
-    return InlineKeyboardMarkup(rows)
 
 
 def get_policy_gate_keyboard(
