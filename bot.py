@@ -2284,7 +2284,7 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await _edit_or_reply(
             msg,
             ui.MSG_SOCIAL_NETWORKS_STUB,
-            ui.get_back_to_more_keyboard(),
+            ui.get_social_networks_keyboard(),
         )
         return
     if data == ui.CB_INFO:

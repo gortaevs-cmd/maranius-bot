@@ -33,7 +33,7 @@ class BotCommandsTests(unittest.TestCase):
         self.assertEqual(buttons[0].text, ui.ADMIN_BTN_VIP_CANCEL)
         self.assertEqual(buttons[0].callback_data, ui.CB_ADMIN_VIP_CANCEL)
 
-    def test_more_menu_includes_social_networks_placeholder(self):
+    def test_more_menu_includes_social_networks(self):
         buttons = [
             button
             for row in ui.get_more_inline_keyboard().inline_keyboard
@@ -42,6 +42,23 @@ class BotCommandsTests(unittest.TestCase):
         social = next(button for button in buttons if button.callback_data == ui.CB_SOCIAL_NETWORKS)
         self.assertEqual(social.text, "📱 Социальные сети")
         self.assertIn("Социальные сети", ui.MSG_SOCIAL_NETWORKS_STUB)
+        self.assertIn("Instagram и Threads могут быть недоступны", ui.MSG_SOCIAL_NETWORKS_STUB)
+        links = {
+            button.text: button.url
+            for row in ui.get_social_networks_keyboard().inline_keyboard
+            for button in row
+            if button.url
+        }
+        self.assertEqual(
+            links,
+            {
+                "🎵 TikTok — Maranius": "https://www.tiktok.com/@maraniuss",
+                "📸 Instagram — Maranius": "https://www.instagram.com/maraniuss",
+                "🧵 Threads — Maranius": "https://www.threads.com/@maraniuss",
+                "🔵 VK — Maranius": "https://vk.ru/maranius",
+                "🕯 Instagram — Ellaria Candles": "https://www.instagram.com/ellaria_candles",
+            },
+        )
 
     def test_every_inline_button_uses_a_registered_callback_family(self):
         keyboards = [

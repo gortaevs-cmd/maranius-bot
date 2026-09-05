@@ -225,6 +225,11 @@ MSG_CONTACT = (
 
 URL_SERVICE_LAN_TAROS = "https://telegra.ph/Celitelskie-uslugi-LAN-TAROS-08-04"
 URL_SERVICE_NIA_TA_NE = "https://telegra.ph/Celitelskie-uslugi-Nia-Ta-Neh-08-04"
+URL_TIKTOK_MARANIUS = "https://www.tiktok.com/@maraniuss"
+URL_INSTAGRAM_MARANIUS = "https://www.instagram.com/maraniuss"
+URL_THREADS_MARANIUS = "https://www.threads.com/@maraniuss"
+URL_VK_MARANIUS = "https://vk.ru/maranius"
+URL_INSTAGRAM_ELLARIA = "https://www.instagram.com/ellaria_candles"
 
 MSG_LEARNING = (
     "<b>Курсы и практики</b>\n\n"
@@ -236,7 +241,8 @@ MSG_LEARNING = (
 
 MSG_SOCIAL_NETWORKS_STUB = (
     "<b>📱 Социальные сети</b>\n\n"
-    "Скоро здесь появятся ссылки на официальные страницы Maranius."
+    "Официальные страницы Maranius и Ellaria Candles.\n\n"
+    "<i>Instagram и Threads могут быть недоступны в некоторых регионах.</i>"
 )
 
 MSG_INFO_FAQ = (
@@ -950,6 +956,19 @@ def get_more_inline_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Политика", callback_data=CB_POLICY),
             ],
             [InlineKeyboardButton("⚙️ Настройки профиля", callback_data=CB_MORE_PROFILE)],
+        ]
+    )
+
+
+def get_social_networks_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🎵 TikTok — Maranius", url=URL_TIKTOK_MARANIUS)],
+            [InlineKeyboardButton("📸 Instagram — Maranius", url=URL_INSTAGRAM_MARANIUS)],
+            [InlineKeyboardButton("🧵 Threads — Maranius", url=URL_THREADS_MARANIUS)],
+            [InlineKeyboardButton("🔵 VK — Maranius", url=URL_VK_MARANIUS)],
+            [InlineKeyboardButton("🕯 Instagram — Ellaria Candles", url=URL_INSTAGRAM_ELLARIA)],
+            [InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_HOME)],
         ]
     )
 
