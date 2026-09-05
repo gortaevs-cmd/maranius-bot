@@ -24,6 +24,12 @@ def _minute_bucket() -> float:
     return datetime.now(timezone.utc).timestamp() // 60
 
 
+def _user_profile_link(user_id: int, first_name: str) -> str:
+    """Кликабельное имя для быстрого перехода к Telegram-профилю."""
+    label = html.escape(first_name) if first_name else str(user_id)
+    return f'<a href="tg://user?id={user_id}">{label}</a>'
+
+
 async def _can_notify_inbox(user_id: int) -> bool:
     async with _lock:
         now_min = _minute_bucket()
@@ -102,7 +108,7 @@ async def notify_legacy_contact_return(
 ) -> None:
     """Notify once when a legacy-inactive contact returns after consent."""
     un = f"@{html.escape(username)}" if username else "—"
-    name = html.escape(first_name) if first_name else "—"
+    name = _user_profile_link(user_id, first_name)
     text = (
         "↩️ <b>Вернулся пользователь из отдельного списка</b>\n"
         f"ID: <code>{user_id}</code>\n"
@@ -130,7 +136,7 @@ async def notify_inbox_entry(
         "📥 <b>Inbox</b>\n"
         f"Тип: {html.escape(entry_type)}\n"
         f"User: <code>{user_id}</code> {un}\n"
-        f"Текст: {html.escape(text[:500])}"
+        f"Текст: <code>{html.escape(text[:500])}</code>"
     )
     await notify_seed_admins(bot, seed_admin_ids, body)
     return True

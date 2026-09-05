@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import bot
 from handlers import vip as vip_handlers
-from integrations import user_registry, vip_codes
+from integrations import admin_alerts, user_registry, vip_codes
+import ui
 
 
 class VipCodeTests(unittest.IsolatedAsyncioTestCase):
@@ -40,6 +41,74 @@ class VipCodeTests(unittest.IsolatedAsyncioTestCase):
         await vip_codes.add_codes_bulk("USED")
         preview = await vip_codes.preview_codes_bulk("NEW\nUSED\n\n# comment\nNEW")
         self.assertEqual(preview, (1, 2, 1))
+
+    async def test_admin_approved_invalid_code_is_recorded_as_used_once(self):
+        self.assertTrue(await vip_codes.mark_code_used("TDO070726R", user_id=1835235749))
+        self.assertFalse(await vip_codes.mark_code_used("tdo070726r", user_id=1835235749))
+        store = await vip_codes.load_store()
+        self.assertEqual(store["used"][0]["code"], "tdo070726r")
+        self.assertEqual(store["used"][0]["user_id"], 1835235749)
+        self.assertEqual(store["used"][0]["source"], "admin_approved_invalid_code")
+
+    async def test_vip_approval_uses_code_from_its_alert(self):
+        message = SimpleNamespace(
+            text="⚠️ Неверный VIP-код\nПользователь: Екатерина\nUser: 1835235749\nВвод: TDO070726R",
+            reply_text=AsyncMock(),
+        )
+        query = SimpleNamespace(
+            data="vip:approve:1835235749",
+            message=message,
+            answer=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+        grant = AsyncMock()
+        mark_used = AsyncMock()
+        audit = AsyncMock()
+
+        await vip_handlers.vip_approve_callback(
+            update,
+            context,
+            admin_guard=AsyncMock(return_value=True),
+            grant_vip=grant,
+            mark_code_used=mark_used,
+            audit_action=audit,
+        )
+
+        grant.assert_awaited_once_with(1835235749)
+        mark_used.assert_awaited_once_with("TDO070726R", 1835235749)
+        audit.assert_awaited_once_with("vip_grant_from_alert", 1835235749, "TDO070726R")
+
+    async def test_admin_notifications_make_text_copyable_and_returned_name_clickable(self):
+        bot_mock = SimpleNamespace(send_message=AsyncMock())
+        await admin_alerts.notify_inbox_entry(
+            bot_mock,
+            {1},
+            user_id=1835235749,
+            username=None,
+            entry_type="unknown_command",
+            text="TDO070726R",
+        )
+        inbox_text = bot_mock.send_message.await_args.kwargs["text"]
+        self.assertIn("<code>TDO070726R</code>", inbox_text)
+
+        bot_mock.send_message.reset_mock()
+        await admin_alerts.notify_legacy_contact_return(
+            bot_mock,
+            {1},
+            user_id=1835235749,
+            username=None,
+            first_name="Екатерина",
+            source="legacy_broadcast_delivery_2026-09-01",
+        )
+        return_text = bot_mock.send_message.await_args.kwargs["text"]
+        self.assertIn('href="tg://user?id=1835235749"', return_text)
+
+    def test_wrong_vip_alert_includes_copyable_user_id(self):
+        text = ui.ADMIN_VIP_WRONG_CODE.format(
+            user_link="Екатерина", user_id=1835235749, code="TDO070726R"
+        )
+        self.assertIn("User: <code>1835235749</code>", text)
 
     async def test_successful_redemption_notifies_admin_with_entered_code(self):
         await vip_codes.add_codes_bulk("VIP-CODE")

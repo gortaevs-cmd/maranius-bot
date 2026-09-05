@@ -735,7 +735,7 @@ async def _handle_card_pull(message, user_id: int) -> None:
         await _edit_or_reply(
             message,
             ui.format_card_already(existing["title"], existing["url"]),
-            ui.get_card_hub_back_keyboard(),
+            ui.get_card_hub_back_keyboard(existing["url"]),
         )
         return
 
@@ -759,13 +759,13 @@ async def _handle_card_pull(message, user_id: int) -> None:
             users[uid]["daily_practice"] = daily_practice.apply_card_pull(state, pull)
             _save_users(users)
     if concurrent_existing:
-        await _edit_or_reply(message, ui.format_card_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard())
+        await _edit_or_reply(message, ui.format_card_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard(concurrent_existing["url"]))
         return
 
     await _edit_or_reply(
         message,
         ui.format_card_success(pull["title"], pull["url"]),
-        ui.get_card_hub_back_keyboard(),
+        ui.get_card_hub_back_keyboard(pull["url"]),
     )
 
 
@@ -778,7 +778,7 @@ async def _handle_crystal_pull(message, user_id: int) -> None:
         await _edit_or_reply(
             message,
             ui.format_crystal_already(existing["title"], existing["url"]),
-            ui.get_card_hub_back_keyboard(),
+            ui.get_card_hub_back_keyboard(existing["url"]),
         )
         return
 
@@ -802,13 +802,13 @@ async def _handle_crystal_pull(message, user_id: int) -> None:
             users[uid]["daily_practice"] = daily_practice.apply_crystal_pull(state, pull)
             _save_users(users)
     if concurrent_existing:
-        await _edit_or_reply(message, ui.format_crystal_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard())
+        await _edit_or_reply(message, ui.format_crystal_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard(concurrent_existing["url"]))
         return
 
     await _edit_or_reply(
         message,
         ui.format_crystal_success(pull["title"], pull["url"]),
-        ui.get_card_hub_back_keyboard(),
+        ui.get_card_hub_back_keyboard(pull["url"]),
     )
 
 
@@ -2171,14 +2171,17 @@ async def vip_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     async def _grant(uid: int) -> None:
         await _grant_vip_user(uid, source="admin_grant")
 
-    async def _audit(action: str, uid: int) -> None:
+    async def _audit(action: str, uid: int, invalid_code: str = "") -> None:
         await _audit_admin_action(
             update,
             action=action,
             target_ids=[uid],
             reason="Решение по алерту о неверном VIP-коде",
-            meta={"source": "vip_alert"},
+            meta={"source": "vip_alert", "invalid_code": invalid_code or None},
         )
+
+    async def _mark_code_used(code: str, uid: int) -> None:
+        await vip_codes.mark_code_used(code, user_id=uid)
 
     await vip_handlers.vip_approve_callback(
         update,
@@ -2187,6 +2190,7 @@ async def vip_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         grant_vip=_grant,
         main_keyboard_for=_main_keyboard_for,
         audit_action=_audit,
+        mark_code_used=_mark_code_used,
     )
 
 

@@ -20,6 +20,12 @@ class BotCommandsTests(unittest.TestCase):
         )
         self.assertIn(ui.URL_CATALOG, ui.MSG_STORE_STUB)
 
+    def test_daily_result_keyboard_has_site_link(self):
+        keyboard = ui.get_card_hub_back_keyboard("https://maranius.ru/themes/kristally/#elixir")
+        button = keyboard.inline_keyboard[0][0]
+        self.assertEqual(button.text, "🌐 Открыть на сайте")
+        self.assertEqual(button.url, "https://maranius.ru/themes/kristally/#elixir")
+
     def test_more_menu_includes_social_networks_placeholder(self):
         buttons = [
             button

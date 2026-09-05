@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import io
+import re
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Set
 
@@ -73,6 +74,7 @@ async def notify_admin_wrong_code(
 
     text = ui.ADMIN_VIP_WRONG_CODE.format(
         user_link=user_link(user_id, username, first_name),
+        user_id=user_id,
         code=html.escape(code.strip()[:120]),
     )
     kb = InlineKeyboardMarkup(
@@ -359,7 +361,8 @@ async def vip_approve_callback(
     admin_guard: Callable[[Update], Any],
     grant_vip: Callable[[int], Any],
     main_keyboard_for: Optional[Callable[[int], Any]] = None,
-    audit_action: Optional[Callable[[str, int], Any]] = None,
+    audit_action: Optional[Callable[..., Any]] = None,
+    mark_code_used: Optional[Callable[[str, int], Any]] = None,
 ) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -374,8 +377,11 @@ async def vip_approve_callback(
         except ValueError:
             return
         await grant_vip(target_id)
+        invalid_code = _invalid_code_from_alert(getattr(query.message, "text", ""))
+        if invalid_code and mark_code_used:
+            await mark_code_used(invalid_code, target_id)
         if audit_action:
-            await audit_action("vip_grant_from_alert", target_id)
+            await audit_action("vip_grant_from_alert", target_id, invalid_code)
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -413,6 +419,14 @@ async def vip_approve_callback(
                 f"❌ Запрос отклонён для <code>{target_id}</code>",
                 parse_mode="HTML",
             )
+
+
+def _invalid_code_from_alert(text: object) -> str:
+    """Получить введённый код из текста конкретного admin-алерта."""
+    if not isinstance(text, str):
+        return ""
+    match = re.search(r"^Ввод:\s*(.+)$", text, flags=re.MULTILINE)
+    return match.group(1).strip()[:120] if match else ""
 
 
 async def admin_vip_summary(update: Update, admin_guard) -> None:

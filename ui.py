@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import html
+from typing import Optional
 
 from telegram import (
     BotCommand,
@@ -500,6 +501,7 @@ ADMIN_BATCH_IMPORT_PREVIEW = (
 ADMIN_VIP_WRONG_CODE = (
     "⚠️ Неверный VIP-код\n"
     "Пользователь: {user_link}\n"
+    "User: <code>{user_id}</code>\n"
     "Ввод: <code>{code}</code>"
 )
 
@@ -923,11 +925,13 @@ def get_card_hub_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def get_card_hub_back_keyboard() -> InlineKeyboardMarkup:
-    """После выдачи карты/кристалла — вернуться к выбору."""
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(BTN_BACK_TODAY, callback_data=CB_CARD_BACK)]]
-    )
+def get_card_hub_back_keyboard(site_url: Optional[str] = None) -> InlineKeyboardMarkup:
+    """После выдачи карты/кристалла — ссылка на результат и возврат к выбору."""
+    rows = []
+    if site_url:
+        rows.append([InlineKeyboardButton("🌐 Открыть на сайте", url=site_url)])
+    rows.append([InlineKeyboardButton(BTN_BACK_TODAY, callback_data=CB_CARD_BACK)])
+    return InlineKeyboardMarkup(rows)
 
 
 def get_more_inline_keyboard() -> InlineKeyboardMarkup:

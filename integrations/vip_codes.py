@@ -168,6 +168,42 @@ async def rollback_redemption(raw: str, *, user_id: int) -> bool:
     return False
 
 
+async def mark_code_used(
+    raw: str,
+    *,
+    user_id: int,
+    username: Optional[str] = None,
+    source: str = "admin_approved_invalid_code",
+) -> bool:
+    """Пометить код из ручного VIP-одобрения как отработанный.
+
+    Операция идемпотентна: повторное нажатие по тому же алерту не создаёт дубль.
+    """
+    norm = normalize_code(raw)
+    if not norm:
+        return False
+    async with _lock:
+        data = _load_unlocked()
+        if norm in _used_codes(data):
+            return False
+        data["active"] = [
+            code for code in data.get("active", []) if normalize_code(str(code)) != norm
+        ]
+        used = data.get("used", [])
+        used.append(
+            {
+                "code": norm,
+                "user_id": user_id,
+                "username": username,
+                "used_at": _now_iso(),
+                "source": source,
+            }
+        )
+        data["used"] = used
+        _save_unlocked(data)
+        return True
+
+
 async def counts() -> Tuple[int, int]:
     data = await load_store()
     return len(data.get("active", [])), len(data.get("used", []))
