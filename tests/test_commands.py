@@ -43,6 +43,7 @@ class BotCommandsTests(unittest.TestCase):
         self.assertEqual(social.text, "📱 Социальные сети")
         self.assertIn("Социальные сети", ui.MSG_SOCIAL_NETWORKS_STUB)
         self.assertIn("Instagram и Threads могут быть недоступны", ui.MSG_SOCIAL_NETWORKS_STUB)
+        self.assertIn("Meta Platforms Inc.", ui.MSG_SOCIAL_NETWORKS_STUB)
         links = {
             button.text: button.url
             for row in ui.get_social_networks_keyboard().inline_keyboard

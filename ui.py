@@ -242,7 +242,9 @@ MSG_LEARNING = (
 MSG_SOCIAL_NETWORKS_STUB = (
     "<b>📱 Социальные сети</b>\n\n"
     "Официальные страницы Maranius и Ellaria Candles.\n\n"
-    "<i>Instagram и Threads могут быть недоступны в некоторых регионах.</i>"
+    "<i>Instagram и Threads могут быть недоступны в некоторых регионах.</i>\n\n"
+    "<i>Instagram — продукт компании Meta Platforms Inc., деятельность которой "
+    "признана экстремистской и запрещена на территории Российской Федерации.</i>"
 )
 
 MSG_INFO_FAQ = (
