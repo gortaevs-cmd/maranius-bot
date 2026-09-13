@@ -1,12 +1,15 @@
+import csv
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import bot
 import ui
-from integrations import admin_audit, consent_log, user_registry, vip_codes
+from integrations import admin_audit, consent_log, inbox as inbox_mod, user_registry, vip_codes
 
 
 class AdminSegmentsTests(unittest.TestCase):
@@ -85,6 +88,24 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("policy_accepted", csv_text)
             self.assertIn("42", csv_text)
 
+    async def test_inbox_export_serializes_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox_path = Path(tmp) / "inbox.json"
+            with patch.object(inbox_mod, "INBOX_FILE", inbox_path):
+                await inbox_mod.add_entry(
+                    entry_type="unknown_command",
+                    user_id=42,
+                    username="tester",
+                    text="test",
+                    meta={"source": "god"},
+                )
+                data, _ = await inbox_mod.export_csv_bytes()
+
+            rows = list(
+                csv.DictReader(io.StringIO(data.decode("utf-8-sig")), delimiter=";")
+            )
+            self.assertEqual(json.loads(rows[0]["meta_json"]), {"source": "god"})
+
     async def test_confirming_code_batch_writes_codes_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -129,6 +150,22 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(message.reply_text.call_args.kwargs["parse_mode"], "HTML")
             self.assertIsNotNone(message.reply_text.call_args.kwargs["reply_markup"])
+
+
+class ReportScheduleTests(unittest.TestCase):
+    def test_weekly_report_runs_on_sunday_at_noon_moscow(self):
+        run_daily = Mock()
+        application = SimpleNamespace(job_queue=SimpleNamespace(run_daily=run_daily))
+
+        bot._schedule_reports(application)
+
+        weekly_call = next(
+            call for call in run_daily.call_args_list if call.kwargs["name"] == "weekly_report"
+        )
+        report_time = weekly_call.kwargs["time"]
+        self.assertEqual(weekly_call.kwargs["days"], (0,))
+        self.assertEqual((report_time.hour, report_time.minute), (12, 0))
+        self.assertEqual(str(report_time.tzinfo), "Europe/Moscow")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,9 @@ Telegram-бот для ежедневных практик, ангельских
 Общий канон инфраструктуры: [CURRENT_STATE.md](../../../99_Системное/Серверы/CURRENT_STATE.md) · статус ботов: [мои_боты_статус.md](../мои_боты_статус.md).
 Пользовательские JSON-данные сохраняются на сервере отдельно от образа; статический каталог карт и PDF входят в проверяемый образ.
 
-**Стенд (Mac):** `@angelic_signs_bot` — `BOT_PROFILE=test`, токен в `BOT_TOKEN_TEST`. Песочница `/me` `/rate`: [`../Bot_TEST_EL_bot/`](../Bot_TEST_EL_bot/).
+**Prod-only:** локально `bot.py` не запускать — один токен, Conflict с контейнером на TimeWeb. Разработка: unit-тесты + `git push` → Actions.
+
+Песочница `/me` `/rate`: [`../Bot_TEST_EL_bot/`](../Bot_TEST_EL_bot/). Маршруты Крайона (отдельный проект): [`../angelic_signs_bot/`](../angelic_signs_bot/).
 
 ## Установка
 
@@ -52,27 +54,22 @@ cp .env.example .env
 
 Открой `.env`:
 
-- **Два бота в одном файле:** задай `BOT_PROFILE=test` или `prod`, плюс `BOT_TOKEN_TEST` и `BOT_TOKEN_PROD`. В режиме **test** используется **только** `BOT_TOKEN_TEST` (без подстановки `BOT_TOKEN`, чтобы случайно не взять прод). Для **prod** при пустом `BOT_TOKEN_PROD` подставится `BOT_TOKEN`.
-- **По-старому:** одна строка `BOT_TOKEN=...` и без `BOT_PROFILE` — считается прод, как раньше.
+- **Боевой бот:** `BOT_PROFILE=prod` и `BOT_TOKEN_PROD=...` (токен `@MaraniusBOT`).
+- **По-старому:** одна строка `BOT_TOKEN=...` и без `BOT_PROFILE` — тоже считается прод.
 - Значения из `.env` **перекрывают** переменные, заданные в терминале (`export ...`), чтобы не путаться с профилем.
 
 ## Запуск бота
 
-```bash
-python3 bot.py
-```
-
-(После `source .venv/bin/activate` подойдёт и `python bot.py`, если он указывает на venv.)
-
-На боевом сервере используется Docker. Код и статические ресурсы поставляются образом из GitHub Container Registry,
+**Production:** только Docker на TimeWeb. Код и статические ресурсы поставляются образом из GitHub Container Registry,
 а пользовательские JSON-данные лежат в `/opt/apps/maranius/.runtime`. Telegram соединение
-идёт через системный SOCKS-туннель, но сам бот больше не является systemd-службой.
+идёт через системный SOCKS-туннель.
 
-После запуска найди своего бота в Telegram и напиши ему `/start` или любое сообщение.
+**Локально:** не запускай `python bot.py` / `scripts/start_mac.sh` — контейнер на сервере уже держит polling.
+Для проверки кода используй unit-тесты (ниже). После деплоя проверь `@MaraniusBOT` в Telegram (`/start`).
 
 ## Проверки
 
-Локальный запус:
+Локальный запуск тестов:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v

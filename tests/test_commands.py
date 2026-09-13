@@ -75,6 +75,7 @@ class BotCommandsTests(unittest.TestCase):
             ui.get_more_inline_keyboard(), vip_content.deck_menu_keyboard(),
             ui.get_profile_menu_keyboard(), ui.get_profile_subs_keyboard(marketing_opt_in=False),
             ui.get_profile_status_back_keyboard(),
+            ui.get_referral_keyboard([{"id": "coupon10", "title": "Купон", "cost": 300}]),
         ]
         callbacks = {
             button.callback_data

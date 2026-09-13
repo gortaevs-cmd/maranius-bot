@@ -39,6 +39,7 @@ from integrations import (
     inbox as inbox_mod,
     legacy_contacts,
     platform_db,
+    referrals,
     user_registry,
     vip_codes,
     vip_content,
@@ -59,6 +60,9 @@ from handlers import vip as vip_handlers
 # Суперюзеры стенда — режим бога и VIP навсегда без кода в чат.
 SEED_ADMIN_IDS: Set[int] = {186758977}
 VIP_CODES_AUDIT_REASON = "Добавление VIP-кодов через админ-панель"
+# Реферальная механика сохранена как черновик, но до решения по её условиям
+# не создаёт привязки, начисления или заявки из пользовательского интерфейса.
+REFERRAL_PROGRAM_ENABLED = False
 
 
 def _main_keyboard_for(user_id: int):
@@ -229,6 +233,15 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
         telegram_id=user.id,
         name=name.strip() or None,
     )
+
+    if REFERRAL_PROGRAM_ENABLED:
+        # Квалификация реферала идёт отдельно от users.json и не зависит от
+        # количества нажатий: учитываем только новый активный календарный день.
+        await referrals.record_activity(
+            user.id,
+            _load_users(),
+            excluded_ids=SEED_ADMIN_IDS,
+        )
 
     chat = update.effective_chat
     if chat and chat.type in ("group", "supergroup"):
@@ -596,9 +609,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not message:
         return
 
+    payload = " ".join(getattr(context, "args", []) or []).strip()[:200]
+
     # До согласия не сохраняем Telegram-профиль или параметр deep-link нового
     # пользователя. Параметр /start может быть данными для аналитики и пишется
     # только после отдельного активного согласия.
+    # В context.user_data сохраняем только технический payload: после gate
+    # Telegram не повторяет args исходного сообщения.
+    if payload:
+        context.user_data["pending_referral_payload"] = payload
     async with _users_lock:
         users = _load_users()
         has_access = user_registry.has_current_access(users, user.id)
@@ -609,14 +628,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    await ensure_user_saved(update, bot=context.bot, force=user.id in SEED_ADMIN_IDS)
-    if getattr(context, "args", None):
-        payload = " ".join(context.args).strip()
-        if payload:
-            async with _users_lock:
-                users = _load_users()
-                user_registry.capture_start_param(users, user.id, payload)
-                _save_users(users)
+    is_new = await ensure_user_saved(update, bot=context.bot, force=user.id in SEED_ADMIN_IDS)
+    payload = context.user_data.pop("pending_referral_payload", payload)
+    if payload:
+        async with _users_lock:
+            users = _load_users()
+            user_registry.capture_start_param(users, user.id, payload)
+            _save_users(users)
+        # Ссылку можно засчитать только первому визиту нового пользователя.
+        if is_new and REFERRAL_PROGRAM_ENABLED:
+            await referrals.register_referral(
+                user.id,
+                payload,
+                _load_users(),
+                excluded_ids=SEED_ADMIN_IDS,
+            )
+            await referrals.record_activity(
+                user.id,
+                _load_users(),
+                excluded_ids=SEED_ADMIN_IDS,
+            )
     async with _users_lock:
         users = _load_users()
         if users.get(str(user.id), {}).get("bot_status") == "blocked":
@@ -2243,6 +2274,22 @@ async def today_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 
+async def _render_referral_dashboard(message, user_id: int, bot, *, notice: str = "") -> None:
+    """Показать реферальный экран с актуальным Telegram deep-link."""
+    me = await bot.get_me()
+    dashboard = await referrals.get_dashboard(
+        user_id,
+        _load_users(),
+        me.username or "MaraniusBOT",
+    )
+    await _edit_or_reply(
+        message,
+        ui.format_referral_dashboard_html(dashboard, notice=notice),
+        ui.get_referral_keyboard(dashboard["rewards"]),
+        disable_web_page_preview=True,
+    )
+
+
 async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Inline-кнопки экрана «Ещё»."""
     query = update.callback_query
@@ -2297,6 +2344,22 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if data == ui.CB_MORE_PROFILE:
         await _edit_or_reply(msg, ui.MSG_PROFILE_MENU, ui.get_profile_menu_keyboard())
+        return
+    if data == ui.CB_PROFILE_REFERRAL:
+        await _edit_or_reply(
+            msg,
+            ui.MSG_REFERRAL_IN_PROGRESS,
+            ui.get_referral_in_progress_keyboard(),
+        )
+        return
+    if data.startswith(ui.CB_PROFILE_REFERRAL_REDEEM_PREFIX):
+        # Старые inline-кнопки, если они остались в чате, тоже не должны
+        # списывать баллы или создавать заявки до запуска программы.
+        await _edit_or_reply(
+            msg,
+            ui.MSG_REFERRAL_IN_PROGRESS,
+            ui.get_referral_in_progress_keyboard(),
+        )
         return
     if data == ui.CB_PROFILE_STATUS:
         user = query.from_user
@@ -2474,7 +2537,8 @@ def _schedule_reports(application: Application) -> None:
     application.job_queue.run_daily(
         _send_weekly_report,
         time=report_time,
-        days=(6,),
+        # python-telegram-bot 20+: 0 = воскресенье, 6 = суббота.
+        days=(0,),
         name="weekly_report",
     )
 

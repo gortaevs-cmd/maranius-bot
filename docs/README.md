@@ -11,6 +11,7 @@
 | Точка входа бота | [`../bot.py`](../bot.py) | Telegram long polling, команды, админка, погода/луна |
 | Тексты и клавиатуры | [`../ui.py`](../ui.py) | Константы `BTN_*`, сообщения, сборка клавиатур |
 | Платформа пользователей | [`../integrations/platform_db.py`](../integrations/platform_db.py) | `data/platform_users.json`, курсы |
+| Реферальная программа | [`../integrations/referrals.py`](../integrations/referrals.py) | Коды, qualification, ledger и заявки на награды |
 | События чатов | [`../events/`](../events/) | Подписки, реакции, `events.json` |
 
 ---
@@ -21,6 +22,7 @@
 |------|------------|
 | [REGISTRY.md](./REGISTRY.md) | Реестр команд, кнопок, callback, переменных `.env`, файлов данных, статусы план/готово |
 | [DATA_REGISTRY.md](./DATA_REGISTRY.md) | Поля JSON (`users`, `platform_users`, планируемые заказы/заявки) |
+| [REFERRAL_PROGRAM.md](./REFERRAL_PROGRAM.md) | Механика рефералов, антифрод, начисления и списание баллов |
 | [CRM_АНАЛИТИКА_И_РАССЫЛКИ.md](./CRM_АНАЛИТИКА_И_РАССЫЛКИ.md) | Целевая база клиентов, VIP-сегментация, кампании, Twenty/n8n и backup-политика |
 | [ИНТЕРФЕЙС_МЕНЮ_И_КОМАНДЫ.md](./ИНТЕРФЕЙС_МЕНЮ_И_КОМАНДЫ.md) | Меню Telegram и команды |
 | [smartbot/](./smartbot/) | Исторические выгрузки SmartBot Pro: EWASMLBOT, KryonCrystalsBot (JSON + памятки) |

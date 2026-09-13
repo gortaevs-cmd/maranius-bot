@@ -319,7 +319,8 @@ MSG_MARKETING_OFF = "Рассылку отключили. Сервисные с�
 
 MSG_PROFILE_MENU = (
     "<b>⚙️ Настройки профиля</b>\n\n"
-    "Здесь можно посмотреть активные подписки и управлять рассылкой новостей."
+    "Здесь можно посмотреть активные подписки, управлять рассылкой новостей "
+    "и узнать о будущей реферальной программе."
 )
 MSG_PROFILE_SUBS_ON = (
     "<b>📬 Подписки</b>\n\n"
@@ -334,6 +335,56 @@ MSG_PROFILE_SUBS_OFF = (
 
 BTN_PROFILE_STATUS = "📋 Статус"
 BTN_PROFILE_SUBS = "📬 Подписки"
+BTN_PROFILE_REFERRAL = "🤝 Стать реферером"
+MSG_REFERRAL_IN_PROGRESS = (
+    "<b>🤝 Реферальная программа</b>\n\n"
+    "Раздел в работе. Мы готовим условия и вернёмся с подробностями позже."
+)
+
+MSG_REFERRAL_NOTICE_INSUFFICIENT = (
+    "Пока недостаточно баллов: нужно {cost}, доступно {balance}."
+)
+MSG_REFERRAL_REDEEMED = (
+    "✅ Заявка на награду «{title}» создана. Списано {cost} баллов.\n\n"
+    "Напиши автору, чтобы получить промокод или согласовать получение награды."
+)
+MSG_REFERRAL_UNKNOWN_REWARD = "Эта награда недоступна. Обнови раздел и попробуй ещё раз."
+
+
+def format_referral_dashboard_html(data: dict, *, notice: str = "") -> str:
+    """Экран реферальной программы; все внешние значения экранируются."""
+    link = html.escape(str(data.get("link") or ""), quote=True)
+    code = html.escape(str(data.get("code") or ""))
+    rewards = data.get("rewards") or []
+    reward_lines = [
+        f"• {html.escape(str(item.get('title') or 'Награда'))} — "
+        f"<b>{int(item.get('cost') or 0)}</b> баллов"
+        for item in rewards
+        if isinstance(item, dict)
+    ]
+    status = (
+        f"Приглашено: <b>{int(data.get('total') or 0)}</b>\n"
+        f"Квалифицировано: <b>{int(data.get('qualified') or 0)}</b>\n"
+        f"На проверке: <b>{int(data.get('pending') or 0)}</b>\n"
+        f"Баланс: <b>{int(data.get('balance') or 0)}</b> баллов"
+    )
+    body = (
+        "<b>🤝 Реферальная программа</b>\n\n"
+        "Поделись ссылкой. Баллы начисляются за реального нового пользователя "
+        "после его активации, а не за сам клик.\n\n"
+        f"Твой код: <code>{code}</code>\n"
+        f"<a href=\"{link}\">Ссылка для приглашения</a>\n\n"
+        f"{status}\n\n"
+        "<b>Как начисляются баллы</b>\n"
+        f"100 баллов — если приглашённый принял обязательные документы и был активен "
+        f"минимум в {int(data.get('min_active_days') or 2)} разных дня "
+        f"с паузой не менее {int(data.get('min_age_hours') or 24)} часов.\n\n"
+        "<b>На что потратить</b>\n"
+        + ("\n".join(reward_lines) if reward_lines else "• награды временно недоступны")
+    )
+    if notice:
+        body = f"{html.escape(notice)}\n\n{body}"
+    return body
 
 CB_POLICY_ACCEPT = "consent:policy:accept"
 CB_USER_AGREEMENT_ACCEPT = "consent:agreement:accept"
@@ -365,6 +416,8 @@ CB_MORE_HOME = "more:home"
 CB_MORE_PROFILE = "more:profile"
 CB_PROFILE_STATUS = "more:profile:status"
 CB_PROFILE_SUBS = "more:profile:subs"
+CB_PROFILE_REFERRAL = "more:profile:referral"
+CB_PROFILE_REFERRAL_REDEEM_PREFIX = "more:profile:referral:redeem:"
 CB_PROFILE_SUB_ON = "more:profile:sub:on"
 CB_PROFILE_SUB_OFF = "more:profile:sub:off"
 CB_WEATHER = "more:weather"
@@ -980,6 +1033,7 @@ def get_profile_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(BTN_PROFILE_STATUS, callback_data=CB_PROFILE_STATUS)],
             [InlineKeyboardButton(BTN_PROFILE_SUBS, callback_data=CB_PROFILE_SUBS)],
+            [InlineKeyboardButton(BTN_PROFILE_REFERRAL, callback_data=CB_PROFILE_REFERRAL)],
             [InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_HOME)],
         ]
     )
@@ -1002,6 +1056,29 @@ def get_profile_status_back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_PROFILE)]]
     )
+
+
+def get_referral_in_progress_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_PROFILE)]]
+    )
+
+
+def get_referral_keyboard(rewards: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for item in rewards:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"🎁 {item.get('title', 'Награда')} · {int(item.get('cost') or 0)}",
+                    callback_data=f"{CB_PROFILE_REFERRAL_REDEEM_PREFIX}{item['id']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(BTN_BACK_MORE, callback_data=CB_MORE_PROFILE)])
+    return InlineKeyboardMarkup(rows)
 
 
 def get_weather_share_keyboard() -> ReplyKeyboardMarkup:

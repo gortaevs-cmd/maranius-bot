@@ -6,6 +6,7 @@ users.json
 admins.json
 admin_audit.json
 consent_log.json
+referrals.json
 legacy_inactive_users.json
 legacy_migration_pending.json
 legacy_migration_last_result.json
@@ -15,6 +16,7 @@ data/platform_users.json
 data/user_courses.json
 data/admin_notify_rate.json
 __pycache__/
+.json-backups/
 *.pyc
 *.pyo
 *.pyd
