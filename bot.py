@@ -53,6 +53,7 @@ from events.handlers import (
 from events import storage as events_storage
 
 import ui
+from technical_heartbeat import heartbeat_loop
 from handlers import consent as consent_handlers
 from handlers import profile as profile_handlers
 from handlers import vip as vip_handlers
@@ -2905,9 +2906,23 @@ async def _maranius_post_init(application: Application) -> None:
     print(f"Seed-админы: {sorted(SEED_ADMIN_IDS)}")
     print(f"Seed-VIP: {sorted(SEED_ADMIN_IDS)}")
     _schedule_reports(application)
+    application.bot_data["technical_heartbeat_task"] = asyncio.create_task(
+        heartbeat_loop(application.bot, SEED_ADMIN_IDS, "Maranius"),
+        name="technical-heartbeat",
+    )
     await _notify_storage_recoveries(application)
     if application.job_queue:
         application.job_queue.run_repeating(_notify_storage_recoveries, interval=60, first=60, name="storage_recovery_alerts")
+
+
+async def _stop_technical_heartbeat(application: Application) -> None:
+    task = application.bot_data.pop("technical_heartbeat_task", None)
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def main() -> None:
@@ -2949,6 +2964,7 @@ def main() -> None:
         .write_timeout(600.0)
         .media_write_timeout(600.0)
         .post_init(_maranius_post_init)
+        .post_stop(_stop_technical_heartbeat)
     )
     if TELEGRAM_PROXY_URL:
         print(f"Telegram proxy: {TELEGRAM_PROXY_URL}")
