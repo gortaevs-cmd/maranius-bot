@@ -6,6 +6,7 @@ import html
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from integrations.json_storage import run_storage_io
 from integrations import consent_log, user_registry
 import ui
 
@@ -118,9 +119,9 @@ async def set_marketing_opt_in(
     action: str = "",
 ) -> None:
     async with users_lock:
-        users = load_users()
+        users = await run_storage_io(load_users)
         user_registry.set_marketing_opt_in(users, user_id, value, action=action)
-        save_users(users)
+        await run_storage_io(save_users, users)
     await consent_log.append(
         user_id=user_id,
         event="marketing_opt_in" if value else "marketing_opt_out",

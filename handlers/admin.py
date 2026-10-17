@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 import ui
 from handlers import vip as vip_handlers
+from integrations.json_storage import run_storage_io
 from integrations import admin_audit, consent_log, inbox as inbox_mod, user_registry, vip_codes, notification_outbox
 from integrations.diagnostics import log_error
 
@@ -158,7 +159,7 @@ class AdminHandlers:
         if user and user.id in self.seed_admin_ids:
             if not await self.require_private_chat(update):
                 return False
-            users = self.load_users()
+            users = await run_storage_io(self.load_users)
             if user_registry.has_current_access(users, user.id):
                 return True
             message = update.effective_message
@@ -221,7 +222,8 @@ class AdminHandlers:
         message = update.effective_message
         if not message or not await self._admin_guard(update):
             return
-        data = user_registry.export_users_csv(self.load_users(), segment=segment)
+        users = await run_storage_io(self.load_users)
+        data = await run_storage_io(user_registry.export_users_csv, users, segment=segment)
         import io
 
         name = f"users_{segment or 'all'}.csv"
@@ -269,7 +271,7 @@ class AdminHandlers:
         action = ""
         audit_action = ""
         async with self.users_lock:
-            users = self.load_users()
+            users = await run_storage_io(self.load_users)
             if cmd in ("vip", "grant_vip"):
                 changed = user_registry.grant_vip(users, uid, source="admin_grant")
                 action = "VIP выдан" if changed else "VIP уже был выдан"
@@ -288,7 +290,7 @@ class AdminHandlers:
                 user_registry.set_admin_blocked(users, uid, False)
                 action = "ограничение снято" if changed else "ограничения уже не было"
                 audit_action = "user_unblock"
-            self.save_users(users)
+            await run_storage_io(self.save_users, users)
 
         await self._audit_admin_action(
             update,
@@ -304,7 +306,7 @@ class AdminHandlers:
                     chat_id=uid,
                     text=ui.MSG_VIP_APPROVE_USER,
                     parse_mode="HTML",
-                    reply_markup=self.main_keyboard_for(uid),
+                    reply_markup=await run_storage_io(self.main_keyboard_for, uid),
                 )
             except Exception as exc:
                 log_error("vip_user_notification_failed", exc)
@@ -345,7 +347,7 @@ class AdminHandlers:
         target_raw = parts[1]
         uid = user_registry.parse_user_ref(target_raw)
         if uid is None:
-            uid = user_registry.find_user_id_by_username(self.load_users(), target_raw)
+            uid = user_registry.find_user_id_by_username(await run_storage_io(self.load_users), target_raw)
         if uid is None:
             await update.message.reply_text(
                 ui.ADMIN_USER_CMD_FAIL.format(target=html.escape(target_raw)), parse_mode="HTML"
@@ -361,7 +363,7 @@ class AdminHandlers:
     async def _admin_find_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str) -> None:
         target = (raw or "").strip()
         uid = user_registry.parse_user_ref(target)
-        users = self.load_users()
+        users = await run_storage_io(self.load_users)
         if uid is None:
             uid = user_registry.find_user_id_by_username(users, target)
         row = users.get(str(uid)) if uid is not None else None
@@ -454,7 +456,7 @@ class AdminHandlers:
             )
             return
         async with self.users_lock:
-            users = self.load_users()
+            users = await run_storage_io(self.load_users)
             granted = sum(not bool(users.get(str(uid), {}).get("vip")) for uid in unique_ids)
         context.user_data["admin_batch"] = {
             "kind": "vip_import",
@@ -521,13 +523,13 @@ class AdminHandlers:
         if batch.get("kind") == "vip_import":
             granted = skipped = 0
             async with self.users_lock:
-                users = self.load_users()
+                users = await run_storage_io(self.load_users)
                 for uid in batch["ids"]:
                     if user_registry.grant_vip(users, uid, source="import"):
                         granted += 1
                     else:
                         skipped += 1
-                self.save_users(users)
+                await run_storage_io(self.save_users, users)
             await self._audit_admin_action(
                 update,
                 action="vip_import",
@@ -609,7 +611,8 @@ class AdminHandlers:
         message = update.effective_message
         if not message or not await self._admin_guard(update):
             return
-        st = user_registry.stats_summary(self.load_users())
+        users = await run_storage_io(self.load_users)
+        st = await run_storage_io(user_registry.stats_summary, users)
         await message.reply_text(
             ui.ADMIN_USERS_SUMMARY.format(
                 total=st["total"],
@@ -798,6 +801,7 @@ class AdminHandlers:
             return
 
     def _admin_user_card_text(self, uid: int, row: Dict[str, Any]) -> str:
+        users = {str(uid): row}
         username = (row.get("username") or "").strip()
         username_text = f"@{html.escape(username)}" if username else "—"
         vip_source = html.escape(user_registry.vip_source_label(row.get("vip_source")))
@@ -808,9 +812,9 @@ class AdminHandlers:
             vip_source=vip_source,
             bot_status="заблокировал" if row.get("bot_status") == "blocked" else "доступен",
             admin_blocked="да" if row.get("admin_blocked") else "нет",
-            marketing="да" if user_registry.has_current_marketing_consent(self.load_users(), uid) else "нет",
-            policy="да" if user_registry.has_current_policy(self.load_users(), uid) else "нет",
-            agreement="да" if user_registry.has_current_user_agreement(self.load_users(), uid) else "нет",
+            marketing="да" if user_registry.has_current_marketing_consent(users, uid) else "нет",
+            policy="да" if user_registry.has_current_policy(users, uid) else "нет",
+            agreement="да" if user_registry.has_current_user_agreement(users, uid) else "нет",
             last_seen=html.escape(str(row.get("last_seen") or "—")),
         )
 

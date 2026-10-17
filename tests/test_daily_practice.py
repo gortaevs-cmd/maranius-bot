@@ -109,6 +109,7 @@ class DailyPracticeConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             saves.append(value["42"]["daily_practice"]["card"]["slug"])
 
         with (
+            patch.object(bot, "_users_lock", asyncio.Lock()),
             patch.object(bot, "_load_users", side_effect=lambda: users),
             patch.object(bot, "_save_users", side_effect=save),
             patch.object(bot.daily_practice, "pick_random_card", side_effect=pulls),

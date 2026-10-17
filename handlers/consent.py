@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Optional, Set
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from integrations.json_storage import run_storage_io
 from integrations import analytics, consent_log, user_registry
 import ui
 
@@ -56,7 +57,7 @@ async def show_policy_gate(
     if not message:
         return
     if users is None:
-        users = user_registry.load_users()
+        users = await run_storage_io(user_registry.load_users)
     if user_id is None and update.effective_user:
         user_id = update.effective_user.id
     agreement_accepted = bool(
@@ -184,7 +185,7 @@ async def consent_callback(
 
     if data in (ui.CB_USER_AGREEMENT_ACCEPT, ui.CB_POLICY_ACCEPT):
         async with users_lock:
-            users = load_users()
+            users = await run_storage_io(load_users)
             if user_registry.is_admin_blocked(users, user.id):
                 await query.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return None
@@ -198,7 +199,7 @@ async def consent_callback(
                 shown = user_registry.marketing_offer_was_shown(users, user.id)
                 if not shown:
                     user_registry.mark_marketing_offer_shown(users, user.id)
-            save_users(users)
+            await run_storage_io(save_users, users)
         if data == ui.CB_USER_AGREEMENT_ACCEPT:
             await _log_user_agreement(user.id, source="gate", action=data)
         else:
@@ -240,7 +241,7 @@ async def consent_callback(
         ui.CB_MARKETING_TOGGLE_ON,
         ui.CB_MARKETING_TOGGLE_OFF,
     ):
-        users = load_users()
+        users = await run_storage_io(load_users)
         if not user_registry.has_current_access(users, user.id):
             await query.message.reply_text(
                 ui.MSG_POLICY_GATE,
@@ -260,9 +261,9 @@ async def consent_callback(
     if data in (ui.CB_MARKETING_YES, ui.CB_MARKETING_NO):
         opt_in = data == ui.CB_MARKETING_YES
         async with users_lock:
-            users = load_users()
+            users = await run_storage_io(load_users)
             user_registry.set_marketing_opt_in(users, user.id, opt_in, action=data)
-            save_users(users)
+            await run_storage_io(save_users, users)
         await _log_marketing(
             user.id, opt_in, source="marketing_offer", action=data
         )
@@ -279,9 +280,9 @@ async def consent_callback(
 
     if data == ui.CB_MARKETING_TOGGLE_ON:
         async with users_lock:
-            users = load_users()
+            users = await run_storage_io(load_users)
             user_registry.set_marketing_opt_in(users, user.id, True, action=data)
-            save_users(users)
+            await run_storage_io(save_users, users)
         await _log_marketing(user.id, True, source="policy_screen", action=data)
         await query.message.reply_text(
             ui.MSG_MARKETING_ON,
@@ -292,9 +293,9 @@ async def consent_callback(
 
     if data == ui.CB_MARKETING_TOGGLE_OFF:
         async with users_lock:
-            users = load_users()
+            users = await run_storage_io(load_users)
             user_registry.set_marketing_opt_in(users, user.id, False, action=data)
-            save_users(users)
+            await run_storage_io(save_users, users)
         await _log_marketing(user.id, False, source="policy_screen", action=data)
         await query.message.reply_text(
             ui.MSG_MARKETING_OFF,
@@ -323,7 +324,7 @@ async def require_user_access(
     if not user:
         return False
     async with users_lock:
-        users = load_users()
+        users = await run_storage_io(load_users)
         if user_registry.is_admin_blocked(users, user.id):
             await reply_restricted(update)
             return False

@@ -11,7 +11,7 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from integrations.diagnostics import log_error
 
@@ -145,7 +145,16 @@ async def run_storage_io(operation: Callable[..., Any], *args, **kwargs) -> Any:
     Cancelling asyncio.to_thread alone does not stop disk I/O. Shield and drain
     it before propagating cancellation, including repeated shutdown requests.
     """
-    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    return await finish_storage_operation(asyncio.to_thread(operation, *args, **kwargs))
+
+
+async def finish_storage_operation(operation: Awaitable[Any]) -> Any:
+    """Drain the whole operation before propagating caller cancellation.
+
+    Also supports several awaited storage steps, such as redeeming a code
+    followed by granting VIP. This does not make separate files crash-atomic.
+    """
+    task = asyncio.ensure_future(operation)
     cancelled = False
     while True:
         try:

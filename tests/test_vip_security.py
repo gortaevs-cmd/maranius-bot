@@ -13,6 +13,9 @@ import ui
 
 class VipCodeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        lock_patch = patch.object(vip_codes, "_lock", asyncio.Lock())
+        lock_patch.start()
+        self.addCleanup(lock_patch.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.path_patch = patch.object(vip_codes, "CODES_FILE", Path(self.tmp.name) / "codes.json")
         self.path_patch.start()

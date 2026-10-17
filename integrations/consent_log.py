@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from integrations.csv_export import SafeCsvWriter
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, run_storage_io, save_json
 
 _BASE = Path(__file__).resolve().parent.parent
 CONSENT_LOG_FILE = Path(os.getenv("MARANIUS_RUNTIME_DIR") or _BASE) / "consent_log.json"
@@ -58,6 +58,38 @@ async def append(
     meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Добавить неизменяемую запись о согласии или отзыве."""
+    async with _LOCK:
+        return await run_storage_io(
+            _append_sync,
+            path,
+            user_id=user_id,
+            event=event,
+            value=value,
+            policy_version=policy_version,
+            purpose=purpose,
+            document=document,
+            document_url=document_url,
+            action=action,
+            source=source,
+            meta=meta,
+        )
+
+
+def _append_sync(
+    path: Optional[Path] = None,
+    *,
+    user_id: int,
+    event: str,
+    value: Optional[bool] = None,
+    policy_version: Optional[str] = None,
+    purpose: str = "",
+    document: str = "",
+    document_url: str = "",
+    action: str = "",
+    source: str = "",
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Добавить неизменяемую запись о согласии или отзыве."""
     log_path = Path(path) if path else CONSENT_LOG_FILE
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -75,23 +107,26 @@ async def append(
         entry["value"] = bool(value)
     if policy_version:
         entry["policy_version"] = str(policy_version)[:32]
-    async with _LOCK:
-        store = load_json(log_path, {"events": []})
-        if not isinstance(store, dict):
-            store = {"events": []}
-        events = store.get("events", [])
-        if not isinstance(events, list):
-            events = []
-        events.append(entry)
-        store["events"] = _purge(events)
-        save_json(log_path, store, trailing_newline=True)
+    store = load_json(log_path, {"events": []})
+    if not isinstance(store, dict):
+        store = {"events": []}
+    events = store.get("events", [])
+    if not isinstance(events, list):
+        events = []
+    events.append(entry)
+    store["events"] = _purge(events)
+    save_json(log_path, store, trailing_newline=True)
     return entry
 
 
 async def recent(path: Optional[Path] = None, *, user_id: Optional[int] = None, limit: int = 20) -> List[Dict[str, Any]]:
-    log_path = Path(path) if path else CONSENT_LOG_FILE
     async with _LOCK:
-        store = load_json(log_path, {"events": []})
+        return await run_storage_io(_recent_sync, path, user_id=user_id, limit=limit)
+
+
+def _recent_sync(path: Optional[Path] = None, *, user_id: Optional[int] = None, limit: int = 20) -> List[Dict[str, Any]]:
+    log_path = Path(path) if path else CONSENT_LOG_FILE
+    store = load_json(log_path, {"events": []})
     events = store.get("events", []) if isinstance(store, dict) else []
     if not isinstance(events, list):
         return []
@@ -103,11 +138,16 @@ async def recent(path: Optional[Path] = None, *, user_id: Optional[int] = None, 
 
 async def export_csv_bytes(path: Optional[Path] = None) -> bytes:
     """Выгрузить журнал согласий для локального контролируемого хранения."""
-    log_path = Path(path) if path else CONSENT_LOG_FILE
     async with _LOCK:
-        store = load_json(log_path, {"events": []})
-        rows = store.get("events", []) if isinstance(store, dict) else []
-        rows = [entry for entry in rows if isinstance(entry, dict)]
+        return await run_storage_io(_export_csv_bytes_sync, path)
+
+
+def _export_csv_bytes_sync(path: Optional[Path] = None) -> bytes:
+    """Выгрузить журнал согласий для локального контролируемого хранения."""
+    log_path = Path(path) if path else CONSENT_LOG_FILE
+    store = load_json(log_path, {"events": []})
+    rows = store.get("events", []) if isinstance(store, dict) else []
+    rows = [entry for entry in rows if isinstance(entry, dict)]
 
     buf = io.StringIO()
     writer = SafeCsvWriter(buf)

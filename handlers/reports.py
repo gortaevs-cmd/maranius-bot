@@ -9,6 +9,7 @@ from typing import Callable, Dict, Set
 
 from telegram.ext import Application, ContextTypes
 
+from integrations.json_storage import run_storage_io
 from integrations import admin_alerts, analytics, inbox as inbox_mod, user_registry
 
 def _format_report_text(*, title: str, st: Dict[str, int], inbox_total: int) -> str:
@@ -31,14 +32,14 @@ class ReportHandlers:
     seed_admin_ids: Set[int]
 
     async def _send_weekly_report(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        st = self.user_stats()
+        st = await run_storage_io(self.user_stats)
         inbox_total, _ = await inbox_mod.stats()
         await analytics.rollup_weekly()
-        text = _format_report_text(title="📊 Отчёт за неделю", st=st, inbox_total=inbox_total)
+        text = await run_storage_io(_format_report_text, title="📊 Отчёт за неделю", st=st, inbox_total=inbox_total)
         await admin_alerts.notify_seed_admins(context.bot, self.seed_admin_ids, text)
 
     async def _send_monthly_report(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        st = self.user_stats()
+        st = await run_storage_io(self.user_stats)
         inbox_total, _ = await inbox_mod.stats()
         now_msk = datetime.now(user_registry.MSK)
         prev = (now_msk.replace(day=1) - timedelta(days=1))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,7 @@ _BASE = Path(__file__).resolve().parent.parent
 DECKS_FILE = _BASE / "data" / "vip" / "decks.json"
 PDF_DIR = _BASE / "data" / "vip" / "pdf"
 PDF_FILE_IDS_FILE = _BASE / "data" / "vip" / "pdf_file_ids.json"
+_PDF_IDS_LOCK = threading.RLock()
 
 # Локальные имена PDF (положить в data/vip/pdf/)
 PDF_TEN_DARK = "ten_dushi_book.pdf"
@@ -32,9 +34,11 @@ def get_pdf_file_id(variant: str) -> Optional[str]:
 
 
 def save_pdf_file_id(variant: str, file_id: str) -> None:
-    data = _load_pdf_file_ids_raw()
-    data[variant] = file_id
-    save_json(PDF_FILE_IDS_FILE, data, trailing_newline=True)
+    # Разные PDF могут завершить загрузку одновременно в разных worker threads.
+    with _PDF_IDS_LOCK:
+        data = _load_pdf_file_ids_raw()
+        data[variant] = file_id
+        save_json(PDF_FILE_IDS_FILE, data, trailing_newline=True)
 
 
 @lru_cache(maxsize=1)

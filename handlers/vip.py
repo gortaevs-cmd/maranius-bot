@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import io
 import re
@@ -13,11 +14,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Upda
 from telegram.ext import ContextTypes
 
 from integrations import vip_codes, vip_content
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import finish_storage_operation, load_json, run_storage_io, save_json
 from integrations.diagnostics import log_error
 import ui
 
 ADMIN_NOTIFY_COOLDOWN_SEC = 300
+_CODE_ACTIVATION_LOCK = asyncio.Lock()
 
 
 def _reply_keyboard(user_id: int, main_keyboard_for: Optional[Callable[[int], Any]] = None):
@@ -27,14 +29,14 @@ def _reply_keyboard(user_id: int, main_keyboard_for: Optional[Callable[[int], An
 
 
 async def load_vip_notify(path: str) -> Dict[str, str]:
-    data = load_json(path, {})
+    data = await run_storage_io(load_json, path, {})
     if not isinstance(data, dict):
         raise ValueError(f"admin_notify.json должен содержать JSON-объект: {path}")
     return data
 
 
 async def save_vip_notify(path: str, data: Dict[str, str]) -> None:
-    save_json(path, data, trailing_newline=True)
+    await run_storage_io(save_json, path, data, trailing_newline=True)
 
 
 def user_link(user_id: int, username: Optional[str], first_name: str = "") -> str:
@@ -104,6 +106,24 @@ async def notify_admin_wrong_code(
             log_error("vip_admin_notification_failed", exc)
 
 
+async def _redeem_and_grant(raw_code: str, user, is_vip, grant_vip):
+    """Keep code consumption and VIP grant together during task cancellation."""
+    async with _CODE_ACTIVATION_LOCK:
+        # Recheck after waiting: another code may already have granted access.
+        if await run_storage_io(is_vip, user.id):
+            return False, "already_vip"
+        ok, reason = await vip_codes.redeem_code(
+            raw_code, user_id=user.id, username=user.username,
+        )
+        if ok:
+            try:
+                await grant_vip(user.id)
+            except Exception:
+                await vip_codes.rollback_redemption(raw_code, user_id=user.id)
+                raise
+        return ok, reason
+
+
 async def try_vip_code(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -121,23 +141,19 @@ async def try_vip_code(
     user = update.effective_user
     if not user or not update.message:
         return False
-    if is_vip(user.id):
+    if await run_storage_io(is_vip, user.id):
         context.user_data.pop("awaiting_vip_code", None)
         return False
     if not context.user_data.get("awaiting_vip_code"):
         return False
 
-    ok, reason = await vip_codes.redeem_code(
-        raw_code,
-        user_id=user.id,
-        username=user.username,
+    ok, reason = await finish_storage_operation(
+        _redeem_and_grant(raw_code, user, is_vip, grant_vip)
     )
+    if reason == "already_vip":
+        context.user_data.pop("awaiting_vip_code", None)
+        return False
     if ok:
-        try:
-            await grant_vip(user.id)
-        except Exception:
-            await vip_codes.rollback_redemption(raw_code, user_id=user.id)
-            raise
         context.user_data.pop("awaiting_vip_code", None)
         if notify_success:
             await notify_success(
@@ -150,7 +166,7 @@ async def try_vip_code(
         await update.message.reply_text(
             ui.MSG_VIP_CODE_OK,
             parse_mode="HTML",
-            reply_markup=_reply_keyboard(user.id, main_keyboard_for),
+            reply_markup=await run_storage_io(_reply_keyboard, user.id, main_keyboard_for),
         )
         await show_vip_home(update, context)
         return True
@@ -160,10 +176,10 @@ async def try_vip_code(
         await update.message.reply_text(
             ui.MSG_VIP_CODE_INVALID,
             parse_mode="HTML",
-            reply_markup=_reply_keyboard(user.id, main_keyboard_for),
+            reply_markup=await run_storage_io(_reply_keyboard, user.id, main_keyboard_for),
             **protect_kwargs,
         )
-        owner = vip_codes.find_used_code_owner(raw_code)
+        owner = await run_storage_io(vip_codes.find_used_code_owner, raw_code)
         if owner and notify_duplicate:
             await notify_duplicate(
                 context,
@@ -186,7 +202,7 @@ async def try_vip_code(
     await update.message.reply_text(
         ui.MSG_VIP_CODE_INVALID,
         parse_mode="HTML",
-        reply_markup=_reply_keyboard(user.id, main_keyboard_for),
+        reply_markup=await run_storage_io(_reply_keyboard, user.id, main_keyboard_for),
         **protect_kwargs,
     )
     await notify_wrong(
@@ -242,9 +258,9 @@ async def vip_menu_callback(
         return
     await query.answer()
     user = query.from_user
-    if not user or not is_vip(user.id):
+    if not user or not await run_storage_io(is_vip, user.id):
         await query.message.reply_text(
-            vip_content.no_access_html(),
+            await run_storage_io(vip_content.no_access_html),
             parse_mode="HTML",
         )
         return
@@ -255,15 +271,15 @@ async def vip_menu_callback(
     if data in ("vip:welcome", "vip:decks"):
         await _vip_edit_or_reply(
             msg,
-            vip_content.vip_home_html(),
-            vip_content.deck_menu_keyboard(),
+            await run_storage_io(vip_content.vip_home_html),
+            await run_storage_io(vip_content.deck_menu_keyboard),
             protect_kwargs,
         )
         return
 
     if data.startswith("vip:deck:"):
         deck_id = data.split(":", 2)[2]
-        deck = vip_content.get_deck(deck_id)
+        deck = await run_storage_io(vip_content.get_deck, deck_id)
         if not deck:
             return
         if deck_id == "kristally":
@@ -277,7 +293,7 @@ async def vip_menu_callback(
         await _vip_edit_or_reply(
             msg,
             deck.get("menu_html") or deck.get("title") or "",
-            vip_content.deck_sections_keyboard(deck_id),
+            await run_storage_io(vip_content.deck_sections_keyboard, deck_id),
             protect_kwargs,
         )
         return
@@ -285,7 +301,7 @@ async def vip_menu_callback(
     if data.startswith("vip:sec:"):
         _, _, rest = data.partition("vip:sec:")
         deck_id, _, section_id = rest.partition(":")
-        html = vip_content.get_section_html(deck_id, section_id)
+        html = await run_storage_io(vip_content.get_section_html, deck_id, section_id)
         if not html:
             return
         await send_vip_html_parts(
@@ -301,7 +317,7 @@ async def vip_menu_callback(
         if variant not in ("dark", "light"):
             return
         path = vip_content.pdf_local_path(variant)
-        if not path.is_file():
+        if not await run_storage_io(path.is_file):
             await msg.reply_text(
                 ui.MSG_VIP_PDF_MISSING,
                 parse_mode="HTML",
@@ -313,7 +329,7 @@ async def vip_menu_callback(
             "light": "Книга «Тень души» светлое оформление",
         }
         caption = captions[variant]
-        cached_id = vip_content.get_pdf_file_id(variant)
+        cached_id = await run_storage_io(vip_content.get_pdf_file_id, variant)
         if cached_id:
             await msg.reply_document(
                 document=cached_id,
@@ -327,12 +343,12 @@ async def vip_menu_callback(
             parse_mode="HTML",
         )
         try:
-            with path.open("rb") as fh:
-                sent = await msg.reply_document(
-                    document=InputFile(fh, filename=path.name),
-                    caption=caption,
-                    **protect_kwargs,
-                )
+            document = InputFile(await run_storage_io(path.read_bytes), filename=path.name)
+            sent = await msg.reply_document(
+                document=document,
+                caption=caption,
+                **protect_kwargs,
+            )
         except Exception as exc:
             log_error("vip_pdf_upload_failed", exc)
             await msg.reply_text(
@@ -347,7 +363,7 @@ async def vip_menu_callback(
 
         doc = sent.document if sent else None
         if doc and doc.file_id:
-            vip_content.save_pdf_file_id(variant, doc.file_id)
+            await run_storage_io(vip_content.save_pdf_file_id, variant, doc.file_id)
         try:
             await status.delete()
         except Exception:
@@ -387,7 +403,7 @@ async def vip_approve_callback(
                 chat_id=target_id,
                 text=ui.MSG_VIP_APPROVE_USER,
                 parse_mode="HTML",
-                reply_markup=_reply_keyboard(target_id, main_keyboard_for),
+                reply_markup=await run_storage_io(_reply_keyboard, target_id, main_keyboard_for),
             )
         except Exception as exc:
             log_error("vip_approval_notification_failed", exc)
@@ -410,7 +426,7 @@ async def vip_approve_callback(
                 chat_id=target_id,
                 text=ui.MSG_VIP_REJECT_USER,
                 parse_mode="HTML",
-                reply_markup=_reply_keyboard(target_id, main_keyboard_for),
+                reply_markup=await run_storage_io(_reply_keyboard, target_id, main_keyboard_for),
             )
         except Exception as exc:
             log_error("vip_rejection_notification_failed", exc)

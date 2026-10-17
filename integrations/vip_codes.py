@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from integrations.csv_export import SafeCsvWriter
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, run_storage_io, save_json
 
 _lock = asyncio.Lock()
 _BASE = Path(__file__).resolve().parent.parent
@@ -43,12 +43,12 @@ def _save_unlocked(data: Dict[str, Any]) -> None:
 
 async def load_store() -> Dict[str, Any]:
     async with _lock:
-        return _load_unlocked()
+        return await run_storage_io(_load_unlocked)
 
 
 async def save_store(data: Dict[str, Any]) -> None:
     async with _lock:
-        _save_unlocked(data)
+        await run_storage_io(_save_unlocked, data)
 
 
 def _active_set(data: Dict[str, Any]) -> Set[str]:
@@ -93,21 +93,31 @@ def _analyze_codes_bulk(data: Dict[str, Any], raw_text: str) -> Tuple[List[str],
 async def preview_codes_bulk(raw_text: str) -> Tuple[int, int, int]:
     """Предпросмотр добавления кодов: new, duplicates, blank_lines."""
     async with _lock:
-        data = _load_unlocked()
-        new_codes, duplicates, skipped = _analyze_codes_bulk(data, raw_text)
+        return await run_storage_io(_preview_codes_bulk_sync, raw_text)
+
+
+def _preview_codes_bulk_sync(raw_text: str) -> Tuple[int, int, int]:
+    """Предпросмотр добавления кодов: new, duplicates, blank_lines."""
+    data = _load_unlocked()
+    new_codes, duplicates, skipped = _analyze_codes_bulk(data, raw_text)
     return len(new_codes), duplicates, skipped
 
 
 async def add_codes_bulk(raw_text: str) -> Tuple[int, int, int]:
     """Добавить коды списком. Returns (added, duplicates, skipped_empty)."""
     async with _lock:
-        data = _load_unlocked()
-        new_codes, duplicates, skipped = _analyze_codes_bulk(data, raw_text)
-        new_active: List[str] = list(data.get("active", []))
-        new_active.extend(new_codes)
-        data["active"] = new_active
-        _save_unlocked(data)
-        return len(new_codes), duplicates, skipped
+        return await run_storage_io(_add_codes_bulk_sync, raw_text)
+
+
+def _add_codes_bulk_sync(raw_text: str) -> Tuple[int, int, int]:
+    """Добавить коды списком. Returns (added, duplicates, skipped_empty)."""
+    data = _load_unlocked()
+    new_codes, duplicates, skipped = _analyze_codes_bulk(data, raw_text)
+    new_active: List[str] = list(data.get("active", []))
+    new_active.extend(new_codes)
+    data["active"] = new_active
+    _save_unlocked(data)
+    return len(new_codes), duplicates, skipped
 
 
 async def redeem_code(
@@ -120,51 +130,69 @@ async def redeem_code(
     Активировать код. Returns (ok, reason).
     reason: ok | invalid | already_used
     """
+    async with _lock:
+        return await run_storage_io(_redeem_code_sync, raw, user_id=user_id, username=username)
+
+
+def _redeem_code_sync(
+    raw: str,
+    *,
+    user_id: int,
+    username: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Активировать код. Returns (ok, reason).
+    reason: ok | invalid | already_used
+    """
     norm = normalize_code(raw)
     if not norm:
         return False, "invalid"
-    async with _lock:
-        data = _load_unlocked()
-        active_list = data.get("active", [])
-        active_norm = [normalize_code(c) for c in active_list]
-        if norm not in active_norm:
-            if norm in _used_codes(data):
-                return False, "already_used"
-            return False, "invalid"
-        idx = active_norm.index(norm)
-        active_list.pop(idx)
-        data["active"] = active_list
-        used = data.get("used", [])
-        used.append(
-            {
-                "code": norm,
-                "user_id": user_id,
-                "username": username,
-                "used_at": _now_iso(),
-            }
-        )
-        data["used"] = used
-        _save_unlocked(data)
-        return True, "ok"
+    data = _load_unlocked()
+    active_list = data.get("active", [])
+    active_norm = [normalize_code(c) for c in active_list]
+    if norm not in active_norm:
+        if norm in _used_codes(data):
+            return False, "already_used"
+        return False, "invalid"
+    idx = active_norm.index(norm)
+    active_list.pop(idx)
+    data["active"] = active_list
+    used = data.get("used", [])
+    used.append(
+        {
+            "code": norm,
+            "user_id": user_id,
+            "username": username,
+            "used_at": _now_iso(),
+        }
+    )
+    data["used"] = used
+    _save_unlocked(data)
+    return True, "ok"
 
 
 async def rollback_redemption(raw: str, *, user_id: int) -> bool:
     """Вернуть код в активные, если выдача VIP не завершилась."""
-    norm = normalize_code(raw)
     async with _lock:
-        data = _load_unlocked()
-        used = data.get("used", [])
-        for index in range(len(used) - 1, -1, -1):
-            row = used[index]
-            if isinstance(row, dict) and normalize_code(str(row.get("code", ""))) == norm and row.get("user_id") == user_id:
-                used.pop(index)
-                active = data.get("active", [])
-                if norm not in _active_set(data):
-                    active.append(norm)
-                data["active"] = active
-                data["used"] = used
-                _save_unlocked(data)
-                return True
+        return await run_storage_io(_rollback_redemption_sync, raw, user_id=user_id)
+
+
+def _rollback_redemption_sync(raw: str, *, user_id: int) -> bool:
+    """Вернуть код в активные, если выдача VIP не завершилась."""
+    norm = normalize_code(raw)
+    data = _load_unlocked()
+    used = data.get("used", [])
+    for index in range(len(used) - 1, -1, -1):
+        row = used[index]
+        if isinstance(row, dict) and normalize_code(str(row.get("code", ""))) == norm and row.get("user_id") == user_id:
+            used.pop(index)
+            active = data.get("active", [])
+            if norm not in _active_set(data):
+                active.append(norm)
+            data["active"] = active
+            data["used"] = used
+            _save_unlocked(data)
+            return True
     return False
 
 
@@ -179,29 +207,43 @@ async def mark_code_used(
 
     Операция идемпотентна: повторное нажатие по тому же алерту не создаёт дубль.
     """
+    async with _lock:
+        return await run_storage_io(_mark_code_used_sync, raw, user_id=user_id, username=username, source=source)
+
+
+def _mark_code_used_sync(
+    raw: str,
+    *,
+    user_id: int,
+    username: Optional[str] = None,
+    source: str = "admin_approved_invalid_code",
+) -> bool:
+    """Пометить код из ручного VIP-одобрения как отработанный.
+
+    Операция идемпотентна: повторное нажатие по тому же алерту не создаёт дубль.
+    """
     norm = normalize_code(raw)
     if not norm:
         return False
-    async with _lock:
-        data = _load_unlocked()
-        if norm in _used_codes(data):
-            return False
-        data["active"] = [
-            code for code in data.get("active", []) if normalize_code(str(code)) != norm
-        ]
-        used = data.get("used", [])
-        used.append(
-            {
-                "code": norm,
-                "user_id": user_id,
-                "username": username,
-                "used_at": _now_iso(),
-                "source": source,
-            }
-        )
-        data["used"] = used
-        _save_unlocked(data)
-        return True
+    data = _load_unlocked()
+    if norm in _used_codes(data):
+        return False
+    data["active"] = [
+        code for code in data.get("active", []) if normalize_code(str(code)) != norm
+    ]
+    used = data.get("used", [])
+    used.append(
+        {
+            "code": norm,
+            "user_id": user_id,
+            "username": username,
+            "used_at": _now_iso(),
+            "source": source,
+        }
+    )
+    data["used"] = used
+    _save_unlocked(data)
+    return True
 
 
 async def counts() -> Tuple[int, int]:
@@ -212,6 +254,10 @@ async def counts() -> Tuple[int, int]:
 async def export_csv_bytes() -> bytes:
     """Один CSV: code, status, user_id, username, used_at."""
     data = await load_store()
+    return await run_storage_io(_export_csv_bytes_sync, data)
+
+
+def _export_csv_bytes_sync(data: Dict[str, Any]) -> bytes:
     buf = io.StringIO()
     writer = SafeCsvWriter(buf)
     writer.writerow(["code", "status", "user_id", "username", "used_at"])

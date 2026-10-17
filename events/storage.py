@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, run_storage_io, save_json
 
 _events_lock = asyncio.Lock()
 _events_file: Optional[str] = None
@@ -41,6 +41,20 @@ async def save_event(
     Сохранить событие и вернуть его id.
     event_type: subscribe | unsubscribe | reaction
     """
+    async with _events_lock:
+        return await run_storage_io(_save_event_sync, event_type, chat, user, meta)
+
+
+def _save_event_sync(
+    event_type: str,
+    chat: Dict[str, Any],
+    user: Dict[str, Any],
+    meta: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Сохранить событие и вернуть его id.
+    event_type: subscribe | unsubscribe | reaction
+    """
     event_id = str(uuid.uuid4())
     record = {
         "id": event_id,
@@ -50,13 +64,12 @@ async def save_event(
         "user": user,
         "meta": meta or {},
     }
-    async with _events_lock:
-        data = _load_events()
-        data.setdefault("events", []).append(record)
-        # Ограничиваем историю (последние 10000 событий)
-        if len(data["events"]) > 10000:
-            data["events"] = data["events"][-10000:]
-        _save_events(data)
+    data = _load_events()
+    data.setdefault("events", []).append(record)
+    # Ограничиваем историю (последние 10000 событий)
+    if len(data["events"]) > 10000:
+        data["events"] = data["events"][-10000:]
+    _save_events(data)
     return event_id
 
 

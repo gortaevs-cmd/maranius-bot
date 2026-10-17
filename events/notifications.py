@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Set
 
 from telegram import Bot
+from integrations.json_storage import run_storage_io
 from integrations.diagnostics import log_error
 
 
@@ -95,7 +96,7 @@ async def notify_admins(
     text: str,
 ) -> None:
     """Отправить уведомление всем админам."""
-    admins = get_admins()
+    admins = await run_storage_io(get_admins)
     if not admins:
         return
     for admin_id in admins:

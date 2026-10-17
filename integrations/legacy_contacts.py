@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, run_storage_io, save_json
 
 _BASE = Path(__file__).resolve().parent.parent
 INACTIVE_USERS_FILE = (
@@ -198,11 +198,20 @@ async def claim_returning_inactive_user(user_id: int) -> Dict[str, Any] | None:
     This operation is intentionally idempotent: only the first accepted
     return receives an admin notification.
     """
-    uid = str(normalize_user_id(user_id))
     async with _lock:
-        data = load_inactive_store()
-        record = data["records"].pop(uid, None)
-        if not isinstance(record, dict):
-            return None
-        save_inactive_store(data)
-        return record
+        return await run_storage_io(_claim_returning_inactive_user_sync, user_id)
+
+
+def _claim_returning_inactive_user_sync(user_id: int) -> Dict[str, Any] | None:
+    """Remove and return a legacy-inactive record once its owner is active.
+
+    This operation is intentionally idempotent: only the first accepted
+    return receives an admin notification.
+    """
+    uid = str(normalize_user_id(user_id))
+    data = load_inactive_store()
+    record = data["records"].pop(uid, None)
+    if not isinstance(record, dict):
+        return None
+    save_inactive_store(data)
+    return record

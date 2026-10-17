@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, Optional, Set
 
 import pytz
 
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, run_storage_io, save_json
 
 _BASE = Path(__file__).resolve().parent.parent
 REFERRALS_FILE = Path(os.getenv("MARANIUS_RUNTIME_DIR") or _BASE) / "referrals.json"
@@ -115,26 +115,31 @@ def _new_code(data: Dict[str, Any]) -> str:
 
 async def get_or_create_code(user_id: int) -> str:
     """Вернуть стабильный код пользователя, создав его при первом открытии."""
-    uid = str(user_id)
     async with referrals_lock:
-        data = _load()
-        row = data["referrers"].get(uid)
-        if isinstance(row, dict) and row.get("code"):
-            code = str(row["code"])
-            if data["codes"].get(code) != user_id:
-                data["codes"][code] = user_id
-                _save(data)
-            return code
-        code = _new_code(data)
-        data["referrers"][uid] = {
-            "user_id": user_id,
-            "code": code,
-            "balance": int((row or {}).get("balance") or 0) if isinstance(row, dict) else 0,
-            "created_at": str((row or {}).get("created_at") or _iso(_now())) if isinstance(row, dict) else _iso(_now()),
-        }
-        data["codes"][code] = user_id
-        _save(data)
+        return await run_storage_io(_get_or_create_code_sync, user_id)
+
+
+def _get_or_create_code_sync(user_id: int) -> str:
+    """Вернуть стабильный код пользователя, создав его при первом открытии."""
+    uid = str(user_id)
+    data = _load()
+    row = data["referrers"].get(uid)
+    if isinstance(row, dict) and row.get("code"):
+        code = str(row["code"])
+        if data["codes"].get(code) != user_id:
+            data["codes"][code] = user_id
+            _save(data)
         return code
+    code = _new_code(data)
+    data["referrers"][uid] = {
+        "user_id": user_id,
+        "code": code,
+        "balance": int((row or {}).get("balance") or 0) if isinstance(row, dict) else 0,
+        "created_at": str((row or {}).get("created_at") or _iso(_now())) if isinstance(row, dict) else _iso(_now()),
+    }
+    data["codes"][code] = user_id
+    _save(data)
+    return code
 
 
 def _is_blocked_or_internal(row: Dict[str, Any]) -> bool:
@@ -154,51 +159,70 @@ async def register_referral(
     now: Optional[datetime] = None,
 ) -> str:
     """Закрепить реферера один раз. Возвращает результат для аудита/UI."""
+    async with referrals_lock:
+        return await run_storage_io(
+            _register_referral_sync,
+            referred_user_id,
+            payload,
+            users,
+            excluded_ids=excluded_ids,
+            now=now,
+        )
+
+
+def _register_referral_sync(
+    referred_user_id: int,
+    payload: str,
+    users: Dict[str, Any],
+    *,
+    excluded_ids: Iterable[int] = (),
+    now: Optional[datetime] = None,
+) -> str:
+    """Закрепить реферера один раз. Возвращает результат для аудита/UI."""
     code = parse_referral_payload(payload)
     if not code:
         return "invalid"
     now = now or _now()
     excluded: Set[int] = set(excluded_ids)
-    async with referrals_lock:
-        data = _load()
-        referrer_id = _safe_user_id(data["codes"].get(code))
-        if not referrer_id or referrer_id == referred_user_id or referrer_id in excluded:
-            return "rejected"
-        referrer_row = users.get(str(referrer_id))
-        referred_row = users.get(str(referred_user_id))
-        if (
-            not isinstance(referrer_row, dict)
-            or not isinstance(referred_row, dict)
-            or _is_blocked_or_internal(referrer_row)
-            or _is_blocked_or_internal(referred_row)
-        ):
-            return "rejected"
-        referred_key = str(referred_user_id)
-        if referred_key in data["referrals"]:
-            return "already_registered"
+    data = _load()
+    referrer_id = _safe_user_id(data["codes"].get(code))
+    if not referrer_id or referrer_id == referred_user_id or referrer_id in excluded:
+        return "rejected"
+    referrer_row = users.get(str(referrer_id))
+    referred_row = users.get(str(referred_user_id))
+    if (
+        not isinstance(referrer_row, dict)
+        or not isinstance(referred_row, dict)
+        or _is_blocked_or_internal(referrer_row)
+        or _is_blocked_or_internal(referred_row)
+    ):
+        return "rejected"
+    referred_key = str(referred_user_id)
+    if referred_key in data["referrals"]:
+        return "already_registered"
 
-        cutoff = now - timedelta(days=1)
-        recent = 0
-        for item in data["referrals"].values():
-            if not isinstance(item, dict) or item.get("referrer_id") != referrer_id:
-                continue
-            joined = _parse_datetime(item.get("joined_at"))
-            if joined and joined >= cutoff:
-                recent += 1
-        if recent >= MAX_NEW_REFERRALS_PER_DAY:
-            return "rate_limited"
+    cutoff = now - timedelta(days=1)
+    recent = 0
+    for item in data["referrals"].values():
+        if not isinstance(item, dict) or item.get("referrer_id") != referrer_id:
+            continue
+        joined = _parse_datetime(item.get("joined_at"))
+        if joined and joined >= cutoff:
+            recent += 1
+    if recent >= MAX_NEW_REFERRALS_PER_DAY:
+        return "rate_limited"
 
-        data["referrals"][referred_key] = {
-            "referred_user_id": referred_user_id,
-            "referrer_id": referrer_id,
-            "code": code,
-            "status": "pending",
-            "joined_at": _iso(now),
-            "active_days": [],
-            "qualified_at": None,
-        }
-        _save(data)
-        return "registered"
+    data["referrals"][referred_key] = {
+        "referred_user_id": referred_user_id,
+        "referrer_id": referrer_id,
+        "code": code,
+        "status": "pending",
+        "joined_at": _iso(now),
+        "active_days": [],
+        "qualified_at": None,
+    }
+    _save(data)
+    return "registered"
 
 
 def _parse_datetime(raw: Any) -> Optional[datetime]:
@@ -231,74 +255,91 @@ async def record_activity(
     now: Optional[datetime] = None,
 ) -> Optional[str]:
     """Записать активный день и один раз выдать reward за квалификацию."""
+    async with referrals_lock:
+        return await run_storage_io(
+            _record_activity_sync,
+            referred_user_id,
+            users,
+            excluded_ids=excluded_ids,
+            now=now,
+        )
+
+
+def _record_activity_sync(
+    referred_user_id: int,
+    users: Dict[str, Any],
+    *,
+    excluded_ids: Iterable[int] = (),
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    """Записать активный день и один раз выдать reward за квалификацию."""
     now = now or _now()
     excluded: Set[int] = set(excluded_ids)
-    async with referrals_lock:
-        data = _load()
-        item = data["referrals"].get(str(referred_user_id))
-        if not isinstance(item, dict) or item.get("status") != "pending":
-            return None
-        referrer_id = _safe_user_id(item.get("referrer_id"))
-        if not referrer_id or referrer_id in excluded:
-            item["status"] = "rejected"
-            _save(data)
-            return "rejected"
-        referrer_row = users.get(str(referrer_id))
-        referred_row = users.get(str(referred_user_id))
-        if (
-            not isinstance(referrer_row, dict)
-            or not isinstance(referred_row, dict)
-            or _is_blocked_or_internal(referrer_row)
-            or _is_blocked_or_internal(referred_row)
-        ):
-            item["status"] = "rejected"
-            _save(data)
-            return "rejected"
-
-        day = now.astimezone(MSK).date().isoformat()
-        active_days = item.setdefault("active_days", [])
-        changed = False
-        if day not in active_days:
-            active_days.append(day)
-            changed = True
-        joined = _parse_datetime(item.get("joined_at"))
-        old_enough = bool(joined and now - joined >= timedelta(hours=MIN_AGE_HOURS))
-        if len(active_days) < MIN_ACTIVE_DAYS or not old_enough:
-            if changed:
-                _save(data)
-            return "pending"
-
-        if _qualified_in_window(data, referrer_id, now) >= MAX_REWARDED_REFERRALS_PER_30_DAYS:
-            item["status"] = "qualified_capped"
-            _save(data)
-            return "qualified_capped"
-
-        item["status"] = "qualified"
-        item["qualified_at"] = _iso(now)
-        event_id = f"activation:{referred_user_id}"
-        if not any(entry.get("id") == event_id for entry in data["ledger"] if isinstance(entry, dict)):
-            referrer = data["referrers"].setdefault(
-                str(referrer_id), {"user_id": referrer_id, "balance": 0}
-            )
-            referrer["balance"] = int(referrer.get("balance") or 0) + ACTIVATION_REWARD_POINTS
-            data["ledger"].append(
-                {
-                    "id": event_id,
-                    "user_id": referrer_id,
-                    "amount": ACTIVATION_REWARD_POINTS,
-                    "kind": "referral_activation",
-                    "referral_user_id": referred_user_id,
-                    "created_at": _iso(now),
-                }
-            )
+    data = _load()
+    item = data["referrals"].get(str(referred_user_id))
+    if not isinstance(item, dict) or item.get("status") != "pending":
+        return None
+    referrer_id = _safe_user_id(item.get("referrer_id"))
+    if not referrer_id or referrer_id in excluded:
+        item["status"] = "rejected"
         _save(data)
-        return "qualified"
+        return "rejected"
+    referrer_row = users.get(str(referrer_id))
+    referred_row = users.get(str(referred_user_id))
+    if (
+        not isinstance(referrer_row, dict)
+        or not isinstance(referred_row, dict)
+        or _is_blocked_or_internal(referrer_row)
+        or _is_blocked_or_internal(referred_row)
+    ):
+        item["status"] = "rejected"
+        _save(data)
+        return "rejected"
+
+    day = now.astimezone(MSK).date().isoformat()
+    active_days = item.setdefault("active_days", [])
+    changed = False
+    if day not in active_days:
+        active_days.append(day)
+        changed = True
+    joined = _parse_datetime(item.get("joined_at"))
+    old_enough = bool(joined and now - joined >= timedelta(hours=MIN_AGE_HOURS))
+    if len(active_days) < MIN_ACTIVE_DAYS or not old_enough:
+        if changed:
+            _save(data)
+        return "pending"
+
+    if _qualified_in_window(data, referrer_id, now) >= MAX_REWARDED_REFERRALS_PER_30_DAYS:
+        item["status"] = "qualified_capped"
+        _save(data)
+        return "qualified_capped"
+
+    item["status"] = "qualified"
+    item["qualified_at"] = _iso(now)
+    event_id = f"activation:{referred_user_id}"
+    if not any(entry.get("id") == event_id for entry in data["ledger"] if isinstance(entry, dict)):
+        referrer = data["referrers"].setdefault(
+            str(referrer_id), {"user_id": referrer_id, "balance": 0}
+        )
+        referrer["balance"] = int(referrer.get("balance") or 0) + ACTIVATION_REWARD_POINTS
+        data["ledger"].append(
+            {
+                "id": event_id,
+                "user_id": referrer_id,
+                "amount": ACTIVATION_REWARD_POINTS,
+                "kind": "referral_activation",
+                "referral_user_id": referred_user_id,
+                "created_at": _iso(now),
+            }
+        )
+    _save(data)
+    return "qualified"
 
 
 async def get_dashboard(user_id: int, users: Dict[str, Any], bot_username: str) -> Dict[str, Any]:
     code = await get_or_create_code(user_id)
     async with referrals_lock:
-        data = _load()
+        data = await run_storage_io(_load)
         referrer = data["referrers"].get(str(user_id), {})
         referrals = [
             item
@@ -326,40 +367,45 @@ async def get_dashboard(user_id: int, users: Dict[str, Any], bot_username: str) 
 
 async def redeem_reward(user_id: int, reward_id: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Списать баллы и создать заявку. Повторный callback не спишет их второй раз."""
+    async with referrals_lock:
+        return await run_storage_io(_redeem_reward_sync, user_id, reward_id, now=now)
+
+
+def _redeem_reward_sync(user_id: int, reward_id: str, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Списать баллы и создать заявку. Повторный callback не спишет их второй раз."""
     reward = REWARD_CATALOG.get(str(reward_id))
     if not reward:
         return {"ok": False, "reason": "unknown_reward"}
     now = now or _now()
-    async with referrals_lock:
-        data = _load()
-        referrer = data["referrers"].get(str(user_id))
-        if not isinstance(referrer, dict):
-            return {"ok": False, "reason": "not_referrer"}
-        balance = int(referrer.get("balance") or 0)
-        if balance < int(reward["cost"]):
-            return {"ok": False, "reason": "insufficient", "balance": balance, "cost": reward["cost"]}
-        redemption_id = uuid.uuid4().hex[:12]
-        referrer["balance"] = balance - int(reward["cost"])
-        data["ledger"].append(
-            {
-                "id": f"redemption:{redemption_id}",
-                "user_id": user_id,
-                "amount": -int(reward["cost"]),
-                "kind": "reward_redemption",
-                "redemption_id": redemption_id,
-                "created_at": _iso(now),
-            }
-        )
-        redemption = {
-            "id": redemption_id,
+    data = _load()
+    referrer = data["referrers"].get(str(user_id))
+    if not isinstance(referrer, dict):
+        return {"ok": False, "reason": "not_referrer"}
+    balance = int(referrer.get("balance") or 0)
+    if balance < int(reward["cost"]):
+        return {"ok": False, "reason": "insufficient", "balance": balance, "cost": reward["cost"]}
+    redemption_id = uuid.uuid4().hex[:12]
+    referrer["balance"] = balance - int(reward["cost"])
+    data["ledger"].append(
+        {
+            "id": f"redemption:{redemption_id}",
             "user_id": user_id,
-            "reward_id": reward_id,
-            "title": reward["title"],
-            "cost": int(reward["cost"]),
-            "fulfillment": reward["fulfillment"],
-            "status": "pending",
+            "amount": -int(reward["cost"]),
+            "kind": "reward_redemption",
+            "redemption_id": redemption_id,
             "created_at": _iso(now),
         }
-        data["redemptions"].append(redemption)
-        _save(data)
-        return {"ok": True, "redemption": redemption, "balance": referrer["balance"]}
+    )
+    redemption = {
+        "id": redemption_id,
+        "user_id": user_id,
+        "reward_id": reward_id,
+        "title": reward["title"],
+        "cost": int(reward["cost"]),
+        "fulfillment": reward["fulfillment"],
+        "status": "pending",
+        "created_at": _iso(now),
+    }
+    data["redemptions"].append(redemption)
+    _save(data)
+    return {"ok": True, "redemption": redemption, "balance": referrer["balance"]}

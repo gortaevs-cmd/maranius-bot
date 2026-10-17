@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from integrations.csv_export import SafeCsvWriter
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, run_storage_io, save_json
 
 RETENTION_DAYS = 365
 MAX_EVENTS = 20_000
@@ -63,6 +63,28 @@ async def append(
     meta: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Атомарно добавить запись. Причина ограничена, чтобы не собирать лишние ПДн."""
+    async with _LOCK:
+        return await run_storage_io(
+            _append_sync,
+            path,
+            actor_id=actor_id,
+            action=action,
+            target_ids=target_ids,
+            reason=reason,
+            meta=meta,
+        )
+
+
+def _append_sync(
+    path: Path,
+    *,
+    actor_id: int,
+    action: str,
+    target_ids: Iterable[int] = (),
+    reason: str,
+    meta: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Атомарно добавить запись. Причина ограничена, чтобы не собирать лишние ПДн."""
     entry = {
         "id": uuid.uuid4().hex[:12],
         "created_at": _now_iso(),
@@ -72,34 +94,43 @@ async def append(
         "reason": " ".join(str(reason).split())[:200],
         "meta": meta or {},
     }
-    async with _LOCK:
-        store = load_json(path, {"events": []})
-        if not isinstance(store, dict):
-            store = {"events": []}
-        entries = store.get("events", [])
-        if not isinstance(entries, list):
-            entries = []
-        entries.append(entry)
-        store["events"] = _purge(entries)
-        save_json(path, store, trailing_newline=True)
+    store = load_json(path, {"events": []})
+    if not isinstance(store, dict):
+        store = {"events": []}
+    entries = store.get("events", [])
+    if not isinstance(entries, list):
+        entries = []
+    entries.append(entry)
+    store["events"] = _purge(entries)
+    save_json(path, store, trailing_newline=True)
     return entry
 
 
 async def recent(path: Path, *, limit: int = 10) -> List[Dict[str, Any]]:
     """Последние записи в порядке от новых к старым."""
     async with _LOCK:
-        store = load_json(path, {"events": []})
-        entries = store.get("events", []) if isinstance(store, dict) else []
-        rows = [entry for entry in entries if isinstance(entry, dict)]
+        return await run_storage_io(_recent_sync, path, limit=limit)
+
+
+def _recent_sync(path: Path, *, limit: int = 10) -> List[Dict[str, Any]]:
+    """Последние записи в порядке от новых к старым."""
+    store = load_json(path, {"events": []})
+    entries = store.get("events", []) if isinstance(store, dict) else []
+    rows = [entry for entry in entries if isinstance(entry, dict)]
     return list(reversed(rows[-max(1, limit) :]))
 
 
 async def export_csv_bytes(path: Path) -> bytes:
     """Выгрузить журнал для локального контролируемого хранения."""
     async with _LOCK:
-        store = load_json(path, {"events": []})
-        rows = store.get("events", []) if isinstance(store, dict) else []
-        rows = [entry for entry in rows if isinstance(entry, dict)]
+        return await run_storage_io(_export_csv_bytes_sync, path)
+
+
+def _export_csv_bytes_sync(path: Path) -> bytes:
+    """Выгрузить журнал для локального контролируемого хранения."""
+    store = load_json(path, {"events": []})
+    rows = store.get("events", []) if isinstance(store, dict) else []
+    rows = [entry for entry in rows if isinstance(entry, dict)]
 
     buf = io.StringIO()
     writer = SafeCsvWriter(buf)

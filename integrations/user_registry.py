@@ -79,6 +79,7 @@ def now_iso() -> str:
 
 
 def load_users() -> Dict[str, Any]:
+    """Sync storage API; async handlers call it through run_storage_io."""
     data = load_json(USERS_FILE, {})
     if not isinstance(data, dict):
         raise ValueError(f"users.json должен содержать JSON-объект: {USERS_FILE}")

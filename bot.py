@@ -37,7 +37,7 @@ from integrations import (
     vip_codes,
     vip_content,
 )
-from integrations.json_storage import JsonStorageError, load_json, pop_recovery_events, save_json
+from integrations.json_storage import JsonStorageError, load_json, pop_recovery_events, save_json, run_storage_io
 from integrations.diagnostics import log_error
 from events.handlers import (
     make_subscribe_handler,
@@ -161,16 +161,15 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
     user = update.effective_user
     if not user:
         return False
-    if not force and not user_registry.has_current_access(_load_users(), user.id):
-        return False
     uid = str(user.id)
-    # После принятия политики уже может быть минимальная запись {id, policy_*}.
-    # Новым считаем профиль, которому ещё не задавали first_seen.
-    existing = _load_users().get(uid)
-    is_new = not isinstance(existing, dict) or not existing.get("first_seen")
-
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
+        if not force and not user_registry.has_current_access(users, user.id):
+            return False
+        # Проверяем первый визит в той же транзакции, что сохраняет профиль:
+        # параллельные сообщения не должны объявить пользователя новым дважды.
+        existing = users.get(uid)
+        is_new = not isinstance(existing, dict) or not existing.get("first_seen")
         user_registry.merge_telegram_profile(
             users,
             user_id=user.id,
@@ -183,7 +182,7 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
         )
         if user.id in SEED_ADMIN_IDS:
             users[uid]["vip"] = True
-        _save_users(users)
+        await run_storage_io(_save_users, users)
 
     # Users from the separately stored legacy-inactive roster are activated
     # only after the normal consent gate has allowed profile saving above.
@@ -213,7 +212,7 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
         # количества нажатий: учитываем только новый активный календарный день.
         await referrals.record_activity(
             user.id,
-            _load_users(),
+            await run_storage_io(_load_users),
             excluded_ids=SEED_ADMIN_IDS,
         )
 
@@ -292,9 +291,9 @@ def is_admin(user_id: int) -> bool:
 async def add_admin(user_id: int) -> None:
     """Добавить пользователя в список администраторов."""
     async with _admins_lock:
-        admins = _load_admins()
+        admins = await run_storage_io(_load_admins)
         admins.add(user_id)
-        _save_admins(admins)
+        await run_storage_io(_save_admins, admins)
 
 
 async def sync_bot_commands(bot) -> int:
@@ -324,7 +323,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if payload:
         context.user_data["pending_referral_payload"] = payload
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         has_access = user_registry.has_current_access(users, user.id)
     if not has_access:
         context.user_data["pending_action"] = "start"
@@ -337,27 +336,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     payload = context.user_data.pop("pending_referral_payload", payload)
     if payload:
         async with _users_lock:
-            users = _load_users()
+            users = await run_storage_io(_load_users)
             user_registry.capture_start_param(users, user.id, payload)
-            _save_users(users)
+            await run_storage_io(_save_users, users)
         # Ссылку можно засчитать только первому визиту нового пользователя.
         if is_new and REFERRAL_PROGRAM_ENABLED:
             await referrals.register_referral(
                 user.id,
                 payload,
-                _load_users(),
+                await run_storage_io(_load_users),
                 excluded_ids=SEED_ADMIN_IDS,
             )
             await referrals.record_activity(
                 user.id,
-                _load_users(),
+                await run_storage_io(_load_users),
                 excluded_ids=SEED_ADMIN_IDS,
             )
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         if users.get(str(user.id), {}).get("bot_status") == "blocked":
             user_registry.set_bot_status(users, user.id, "active")
-            _save_users(users)
+            await run_storage_io(_save_users, users)
     if user.id in SEED_ADMIN_IDS:
         await add_admin(user.id)
     chat = update.effective_chat
@@ -368,7 +367,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     await message.reply_text(
         ui.START_MESSAGE,
-        reply_markup=_main_keyboard_for(user.id),
+        reply_markup=await run_storage_io(_main_keyboard_for, user.id),
     )
 
 
@@ -451,7 +450,7 @@ def _clear_vip_awaiting(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _handle_card_pull(message, user_id: int) -> None:
     uid = str(user_id)
     async with _users_lock:
-        state = daily_practice.practice_from_user(_load_users().get(uid))
+        state = daily_practice.practice_from_user((await run_storage_io(_load_users)).get(uid))
     existing = state.get("card")
     if existing:
         await _edit_or_reply(
@@ -463,7 +462,7 @@ async def _handle_card_pull(message, user_id: int) -> None:
 
     await _edit_or_reply(message, ui.MSG_CARD_SHUFFLE, None)
     await asyncio.sleep(2.5)
-    pull = daily_practice.pick_random_card()
+    pull = await run_storage_io(daily_practice.pick_random_card)
     if not pull:
         await _edit_or_reply(
             message,
@@ -473,13 +472,13 @@ async def _handle_card_pull(message, user_id: int) -> None:
         return
 
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         state = daily_practice.practice_from_user(users.get(uid))
         concurrent_existing = state.get("card")
         if not concurrent_existing:
             users.setdefault(uid, {"id": user_id})
             users[uid]["daily_practice"] = daily_practice.apply_card_pull(state, pull)
-            _save_users(users)
+            await run_storage_io(_save_users, users)
     if concurrent_existing:
         await _edit_or_reply(message, ui.format_card_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard(concurrent_existing["url"]))
         return
@@ -494,7 +493,7 @@ async def _handle_card_pull(message, user_id: int) -> None:
 async def _handle_crystal_pull(message, user_id: int) -> None:
     uid = str(user_id)
     async with _users_lock:
-        state = daily_practice.practice_from_user(_load_users().get(uid))
+        state = daily_practice.practice_from_user((await run_storage_io(_load_users)).get(uid))
     existing = state.get("crystal")
     if existing:
         await _edit_or_reply(
@@ -506,7 +505,7 @@ async def _handle_crystal_pull(message, user_id: int) -> None:
 
     await _edit_or_reply(message, ui.MSG_CRYSTAL_SHUFFLE, None)
     await asyncio.sleep(2.5)
-    pull = daily_practice.pick_random_crystal()
+    pull = await run_storage_io(daily_practice.pick_random_crystal)
     if not pull:
         await _edit_or_reply(
             message,
@@ -516,13 +515,13 @@ async def _handle_crystal_pull(message, user_id: int) -> None:
         return
 
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         state = daily_practice.practice_from_user(users.get(uid))
         concurrent_existing = state.get("crystal")
         if not concurrent_existing:
             users.setdefault(uid, {"id": user_id})
             users[uid]["daily_practice"] = daily_practice.apply_crystal_pull(state, pull)
-            _save_users(users)
+            await run_storage_io(_save_users, users)
     if concurrent_existing:
         await _edit_or_reply(message, ui.format_crystal_already(concurrent_existing["title"], concurrent_existing["url"]), ui.get_card_hub_back_keyboard(concurrent_existing["url"]))
         return
@@ -537,10 +536,10 @@ async def _handle_crystal_pull(message, user_id: int) -> None:
 async def _handle_dice_roll(message, user_id: int, bot) -> None:
     uid = str(user_id)
     async with _users_lock:
-        state = daily_practice.practice_from_user(_load_users().get(uid))
+        state = daily_practice.practice_from_user((await run_storage_io(_load_users)).get(uid))
     existing = state.get("dice")
     if existing:
-        dice_text = dice_content.get_dice_message_html(existing["value"])
+        dice_text = await run_storage_io(dice_content.get_dice_message_html, existing["value"])
         await message.reply_text(
             ui.format_dice_already(dice_text),
             parse_mode="HTML",
@@ -554,20 +553,20 @@ async def _handle_dice_roll(message, user_id: int, bot) -> None:
     value = value if 1 <= value <= 6 else 1
 
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         state = daily_practice.practice_from_user(users.get(uid))
         concurrent_existing = state.get("dice")
         if not concurrent_existing:
             users.setdefault(uid, {"id": user_id})
             users[uid]["daily_practice"] = daily_practice.apply_dice_roll(state, value)
-            _save_users(users)
+            await run_storage_io(_save_users, users)
 
     if concurrent_existing:
-        dice_text = dice_content.get_dice_message_html(concurrent_existing["value"])
+        dice_text = await run_storage_io(dice_content.get_dice_message_html, concurrent_existing["value"])
         await dice_msg.reply_text(ui.format_dice_already(dice_text), parse_mode="HTML")
         return
 
-    dice_text = dice_content.get_dice_message_html(value)
+    dice_text = await run_storage_io(dice_content.get_dice_message_html, value)
     await dice_msg.reply_text(dice_text, parse_mode="HTML")
 
 async def _edit_or_reply(
@@ -618,7 +617,7 @@ async def _reply_screen(
         await message.reply_text(
             text,
             parse_mode=parse_mode,
-            reply_markup=_main_keyboard_for(uid) if uid else ui.get_main_keyboard(),
+            reply_markup=await run_storage_io(_main_keyboard_for, uid) if uid else ui.get_main_keyboard(),
             disable_web_page_preview=disable_web_page_preview,
             **extra,
         )
@@ -630,9 +629,9 @@ def _user_is_vip(user_id: int) -> bool:
 
 async def _grant_vip_user(user_id: int, *, source: str = "code") -> None:
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         user_registry.grant_vip(users, user_id, source=source)
-        _save_users(users)
+        await run_storage_io(_save_users, users)
 
 
 async def show_vip_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -644,17 +643,17 @@ async def show_vip_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     if not user:
         return
-    if _user_is_vip(user.id):
+    if await run_storage_io(_user_is_vip, user.id):
         context.user_data.pop("awaiting_vip_code", None)
         await _reply_screen(
             update,
-            vip_content.vip_home_html(),
-            inline_markup=vip_content.deck_menu_keyboard(),
+            await run_storage_io(vip_content.vip_home_html),
+            inline_markup=await run_storage_io(vip_content.deck_menu_keyboard),
             protect=True,
         )
         return
     context.user_data["awaiting_vip_code"] = True
-    text = f"<b>{ui.BTN_VIP}</b>\n\n{vip_content.no_access_html()}"
+    text = f"<b>{ui.BTN_VIP}</b>\n\n{await run_storage_io(vip_content.no_access_html)}"
     await _reply_screen(update, text, protect=True)
 
 
@@ -733,7 +732,7 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def show_policy(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    users = _load_users()
+    users = await run_storage_io(_load_users)
     user = update.effective_user
     with_marketing = bool(user and user_registry.has_current_access(users, user.id))
     message = update.effective_message
@@ -785,7 +784,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
     context.user_data.pop("pending_angel_key", None)
     await ensure_user_saved(update, bot=context.bot)
-    meaning, normalized = ewasml_services.lookup_angelic_sign(key)
+    meaning, normalized = await run_storage_io(ewasml_services.lookup_angelic_sign, key)
     if meaning:
         display = normalized if normalized != key.strip() else key.strip()
         text = ui.format_angelic_sign(display, meaning)
@@ -793,7 +792,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
             text,
             parse_mode="HTML",
             disable_web_page_preview=True,
-            reply_markup=_main_keyboard_for(update.effective_user.id)
+            reply_markup=await run_storage_io(_main_keyboard_for, update.effective_user.id)
             if update.effective_user
             else ui.get_main_keyboard(),
             **PROTECT_KWARGS,
@@ -823,7 +822,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await message.reply_text(
         ui.MSG_ANGEL_NOT_FOUND.format(sign=key.strip()),
         parse_mode="HTML",
-        reply_markup=_main_keyboard_for(user.id) if user else ui.get_main_keyboard(),
+        reply_markup=await run_storage_io(_main_keyboard_for, user.id) if user else ui.get_main_keyboard(),
         **PROTECT_KWARGS,
     )
 
@@ -925,7 +924,7 @@ async def _render_referral_dashboard(message, user_id: int, bot, *, notice: str 
     me = await bot.get_me()
     dashboard = await referrals.get_dashboard(
         user_id,
-        _load_users(),
+        await run_storage_io(_load_users),
         me.username or "MaraniusBOT",
     )
     await _edit_or_reply(
@@ -1011,11 +1010,11 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         user = query.from_user
         if not user:
             return
-        row = user_registry.get_user(_load_users(), user.id)
+        row = user_registry.get_user(await run_storage_io(_load_users), user.id)
         courses = await platform_db.get_user_courses(str(user.id))
         text = profile_handlers.format_status_html(
             row,
-            is_vip=_user_is_vip(user.id),
+            is_vip=await run_storage_io(_user_is_vip, user.id),
             courses=courses,
         )
         await _edit_or_reply(msg, text, ui.get_profile_status_back_keyboard())
@@ -1024,7 +1023,7 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         user = query.from_user
         if not user:
             return
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         opt_in = user_registry.has_current_marketing_consent(users, user.id)
         await _edit_or_reply(
             msg,
@@ -1049,7 +1048,7 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             source="profile",
             action=data,
         )
-        opt_in = user_registry.has_current_marketing_consent(_load_users(), user.id)
+        opt_in = user_registry.has_current_marketing_consent(await run_storage_io(_load_users), user.id)
         await _edit_or_reply(
             msg,
             profile_handlers.subscriptions_message(marketing_opt_in=opt_in),
@@ -1059,12 +1058,12 @@ async def more_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             chat_id=user.id,
             text=ui.MSG_MARKETING_OFF,
             parse_mode="HTML",
-            reply_markup=_main_keyboard_for(user.id),
+            reply_markup=await run_storage_io(_main_keyboard_for, user.id),
         )
         return
     if data == ui.CB_POLICY:
         user = query.from_user
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         with_marketing = bool(user and user_registry.has_current_access(users, user.id))
         await _edit_or_reply(
             msg,
@@ -1134,7 +1133,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
     if mc.old_chat_member.status == status:
         return
     async with _users_lock:
-        users = _load_users()
+        users = await run_storage_io(_load_users)
         # Не создаём профиль по служебному событию до принятия документов.
         if str(user_id) not in users:
             return
@@ -1142,7 +1141,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             user_registry.set_bot_status(users, user_id, "blocked")
         elif status == "member":
             user_registry.set_bot_status(users, user_id, "active")
-        _save_users(users)
+        await run_storage_io(_save_users, users)
 
 
 async def _continue_pending_action(
@@ -1172,13 +1171,13 @@ async def _continue_pending_action(
     elif pending == "marketing_subscribe":
         user = update.effective_user
         if user and update.effective_message:
-            users = _load_users()
+            users = await run_storage_io(_load_users)
             opt_in = user_registry.has_current_marketing_consent(users, user.id)
             text = ui.MSG_MARKETING_ON if opt_in else ui.MSG_MARKETING_OFF
             await update.effective_message.reply_text(
                 text,
                 parse_mode="HTML",
-                reply_markup=_main_keyboard_for(user.id),
+                reply_markup=await run_storage_io(_main_keyboard_for, user.id),
             )
     elif pending == "weather":
         await weather(update, context)
@@ -1193,7 +1192,7 @@ async def _continue_pending_action(
             await update.effective_message.reply_text(
                 ui.UNKNOWN_COMMAND_HINT,
                 parse_mode="HTML",
-                reply_markup=_main_keyboard_for(update.effective_user.id)
+                reply_markup=await run_storage_io(_main_keyboard_for, update.effective_user.id)
                 if update.effective_user
                 else ui.get_main_keyboard(),
             )
@@ -1206,11 +1205,11 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         user = query.from_user
         if user:
             async with _users_lock:
-                users = _load_users()
+                users = await run_storage_io(_load_users)
                 user_registry.set_marketing_opt_in(
                     users, user.id, False, action=ui.CB_MARKETING_UNSUB
                 )
-                _save_users(users)
+                await run_storage_io(_save_users, users)
             await consent_log.append(
                 user_id=user.id,
                 event="marketing_opt_out",
@@ -1230,7 +1229,7 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await query.message.reply_text(
                     ui.MSG_MARKETING_OFF,
                     parse_mode="HTML",
-                    reply_markup=_main_keyboard_for(user.id),
+                    reply_markup=await run_storage_io(_main_keyboard_for, user.id),
                 )
         return
     pending = await consent_handlers.consent_callback(
@@ -1271,7 +1270,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if text == ui.BTN_MARKETING_ON:
         async with _users_lock:
-            users = _load_users()
+            users = await run_storage_io(_load_users)
             if user_registry.is_admin_blocked(users, user.id):
                 await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return
@@ -1304,7 +1303,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not _is_seed_admin(user.id):
         async with _users_lock:
-            if user_registry.is_admin_blocked(_load_users(), user.id):
+            if user_registry.is_admin_blocked(await run_storage_io(_load_users), user.id):
                 await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return
 
@@ -1363,7 +1362,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(
         ui.UNKNOWN_COMMAND_HINT,
         parse_mode="HTML",
-        reply_markup=_main_keyboard_for(user.id),
+        reply_markup=await run_storage_io(_main_keyboard_for, user.id),
     )
 
 
@@ -1374,7 +1373,7 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message:
         try:
             user = getattr(update, "effective_user", None)
-            kb = _main_keyboard_for(user.id) if user else ui.get_main_keyboard()
+            kb = await run_storage_io(_main_keyboard_for, user.id) if user else ui.get_main_keyboard()
             await message.reply_text(ui.MSG_TECHNICAL_ERROR, reply_markup=kb)
         except Exception as exc:
             log_error("error_reply_failed", exc)
@@ -1451,9 +1450,9 @@ def _apply_pending_legacy_migration() -> Optional[Dict[str, Any]]:
 
 async def _maranius_post_init(application: Application) -> None:
     """Сброс webhook (иначе polling конфликтует) и явный лог, какой бот подключён."""
-    ensure_seed_admins()
-    ensure_seed_vip()
-    migration = _apply_pending_legacy_migration()
+    await run_storage_io(ensure_seed_admins)
+    await run_storage_io(ensure_seed_vip)
+    migration = await run_storage_io(_apply_pending_legacy_migration)
     if migration:
         result = migration["result"]
         await admin_alerts.notify_seed_admins(

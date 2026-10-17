@@ -15,6 +15,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import ui
+from integrations.json_storage import run_storage_io
 from integrations.diagnostics import log_error
 
 WEATHER_CITY_QUERY = "Moscow"
@@ -503,7 +504,7 @@ class WeatherHandlers:
         now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         timezone_str = _get_timezone_by_coords(lat, lon)
         async with self.users_lock:
-            users = self.load_users()
+            users = await run_storage_io(self.load_users)
             row = users.setdefault(uid, {})
             row["last_location"] = {"lat": lat, "lon": lon, "updated_at": now_str}
             for key in ("last_weather_text", "last_weather_location", "last_weather_fetched_at"):
@@ -512,20 +513,20 @@ class WeatherHandlers:
                 row["timezone"] = timezone_str
             else:
                 row.pop("timezone", None)
-            self.save_users(users)
+            await run_storage_io(self.save_users, users)
             return dict(row)
 
     async def _save_weather_cache(self, uid: str, text: str, *, location: Dict[str, Any]) -> bool:
         """Не сохранять результат запроса, если за это время изменилось место."""
         async with self.users_lock:
-            users = self.load_users()
+            users = await run_storage_io(self.load_users)
             row = users.get(uid)
             if not row or row.get("last_location") != location:
                 return False
             row["last_weather_text"] = text
             row["last_weather_location"] = dict(location)
             row["last_weather_fetched_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-            self.save_users(users)
+            await run_storage_io(self.save_users, users)
             return True
 
     async def _weather_fetch_and_send(self, update: Update, user_data: Dict[str, Any]) -> None:
@@ -551,7 +552,7 @@ class WeatherHandlers:
             user_data.get("timezone"),
             fetched_at=datetime.utcnow(),
         )
-        main_kb = self.main_keyboard_for(user.id)
+        main_kb = await run_storage_io(self.main_keyboard_for, user.id)
         if not text:
             await message.reply_text(ui.MSG_WEATHER_FETCH_FAIL, reply_markup=main_kb)
             return
@@ -571,8 +572,8 @@ class WeatherHandlers:
             return
 
         uid = str(user.id)
-        user_data = self.load_users().get(uid, {})
-        main_kb = self.main_keyboard_for(user.id)
+        user_data = (await run_storage_io(self.load_users)).get(uid, {})
+        main_kb = await run_storage_io(self.main_keyboard_for, user.id)
 
         if "last_location" not in user_data:
             await _weather_ask_location(message)
@@ -611,7 +612,7 @@ class WeatherHandlers:
             return
 
         uid = str(user.id)
-        main_kb = self.main_keyboard_for(user.id)
+        main_kb = await run_storage_io(self.main_keyboard_for, user.id)
 
         try:
             lat = update.message.location.latitude
@@ -668,7 +669,7 @@ class WeatherHandlers:
         await message.reply_text(
             text,
             parse_mode="HTML",
-            reply_markup=self.main_keyboard_for(update.effective_user.id)
+            reply_markup=await run_storage_io(self.main_keyboard_for, update.effective_user.id)
             if update.effective_user
             else ui.get_main_keyboard(),
         )
