@@ -25,7 +25,7 @@ def _now_iso() -> str:
 
 
 def _load_json(path: Path, default: Any) -> Any:
-    return load_json(path, default)
+    return load_json(path, default, allow_recovery=Path(path) != Path(AGGREGATES_FILE))
 
 
 def _save_json(path: Path, data: Any) -> None:

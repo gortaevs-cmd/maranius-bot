@@ -107,7 +107,7 @@ def _append_sync(
         entry["value"] = bool(value)
     if policy_version:
         entry["policy_version"] = str(policy_version)[:32]
-    store = load_json(log_path, {"events": []})
+    store = load_json(log_path, {"events": []}, allow_recovery=False)
     if not isinstance(store, dict):
         store = {"events": []}
     events = store.get("events", [])
@@ -126,7 +126,7 @@ async def recent(path: Optional[Path] = None, *, user_id: Optional[int] = None, 
 
 def _recent_sync(path: Optional[Path] = None, *, user_id: Optional[int] = None, limit: int = 20) -> List[Dict[str, Any]]:
     log_path = Path(path) if path else CONSENT_LOG_FILE
-    store = load_json(log_path, {"events": []})
+    store = load_json(log_path, {"events": []}, allow_recovery=False)
     events = store.get("events", []) if isinstance(store, dict) else []
     if not isinstance(events, list):
         return []
@@ -145,7 +145,7 @@ async def export_csv_bytes(path: Optional[Path] = None) -> bytes:
 def _export_csv_bytes_sync(path: Optional[Path] = None) -> bytes:
     """Выгрузить журнал согласий для локального контролируемого хранения."""
     log_path = Path(path) if path else CONSENT_LOG_FILE
-    store = load_json(log_path, {"events": []})
+    store = load_json(log_path, {"events": []}, allow_recovery=False)
     rows = store.get("events", []) if isinstance(store, dict) else []
     rows = [entry for entry in rows if isinstance(entry, dict)]
 

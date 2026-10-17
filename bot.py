@@ -1343,7 +1343,7 @@ def _apply_pending_legacy_migration() -> Optional[Dict[str, Any]]:
     if not pending_path.is_file():
         return None
 
-    manifest = load_json(pending_path, None)
+    manifest = load_json(pending_path, None, allow_recovery=False)
     if not isinstance(manifest, dict):
         raise ValueError("Legacy migration manifest must be an object")
     required_keys = ("source", "active_user_ids", "vip_user_ids", "inactive_user_ids")
@@ -1351,7 +1351,7 @@ def _apply_pending_legacy_migration() -> Optional[Dict[str, Any]]:
         raise ValueError("Legacy migration manifest is missing required fields")
 
     def commit():
-        previous = load_json(legacy_contacts.LAST_MIGRATION_FILE, None)
+        previous = load_json(legacy_contacts.LAST_MIGRATION_FILE, None, allow_recovery=False)
         if isinstance(previous, dict) and previous.get("manifest") == manifest:
             return None
         users = _load_users()

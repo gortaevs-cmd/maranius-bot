@@ -45,7 +45,7 @@ def _number(value) -> bool:
 
 
 def _load() -> dict:
-    store = load_json(OUTBOX_FILE, {"version": 1, "items": [], "next_allowed_at": 0})
+    store = load_json(OUTBOX_FILE, {"version": 1, "items": [], "next_allowed_at": 0}, allow_recovery=False)
     valid = isinstance(store, dict) and type(store.get("version")) is int and store['version'] == 1 and isinstance(store.get("items"), list)
     if not valid or not _number(store.get("next_allowed_at")):
         raise JsonStorageError("Invalid notification outbox schema")

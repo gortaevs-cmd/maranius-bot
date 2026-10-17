@@ -69,7 +69,7 @@ def empty_inactive_store() -> Dict[str, Any]:
 
 def load_inactive_store(path: Path | None = None) -> Dict[str, Any]:
     path = path or INACTIVE_USERS_FILE
-    data = load_json(path, empty_inactive_store())
+    data = load_json(path, empty_inactive_store(), allow_recovery=False)
     if not isinstance(data, dict):
         raise ValueError(f"Inactive legacy store must be an object: {path}")
     records = data.get("records")

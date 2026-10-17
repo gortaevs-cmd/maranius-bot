@@ -69,6 +69,16 @@ class TransactionFixture:
 
 
 class TransactionRecoveryTests(TransactionFixture, unittest.TestCase):
+    def test_invalid_participant_cannot_restore_only_one_old_file(self):
+        self.seed_user()
+        storage.save_json(vip_codes.CODES_FILE, {'active': ['one-code'], 'used': []})
+        self.assertEqual(self.activate(), (True, 'ok'))
+        user_registry.USERS_FILE.write_bytes(b'{broken user data')
+        with self.assertRaises(storage.JsonStorageError): user_registry.load_users()
+        self.assertEqual(user_registry.USERS_FILE.read_bytes(), b'{broken user data')
+        self.assertEqual(len(self.queue()), 1)
+        self.assertEqual(len(vip_codes._load_unlocked()['used']), 1)
+
     def test_callback_failure_discards_all_staged_changes(self):
         self.prepare_pair()
         def fail():

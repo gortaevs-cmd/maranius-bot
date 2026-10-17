@@ -29,7 +29,7 @@ def _empty_store() -> Dict[str, Any]:
 
 
 def _load_unlocked() -> Dict[str, Any]:
-    data = load_json(CODES_FILE, _empty_store())
+    data = load_json(CODES_FILE, _empty_store(), allow_recovery=False)
     if not isinstance(data, dict):
         return _empty_store()
     data.setdefault("active", [])

@@ -94,7 +94,7 @@ def _append_sync(
         "reason": " ".join(str(reason).split())[:200],
         "meta": meta or {},
     }
-    store = load_json(path, {"events": []})
+    store = load_json(path, {"events": []}, allow_recovery=False)
     if not isinstance(store, dict):
         store = {"events": []}
     entries = store.get("events", [])
@@ -114,7 +114,7 @@ async def recent(path: Path, *, limit: int = 10) -> List[Dict[str, Any]]:
 
 def _recent_sync(path: Path, *, limit: int = 10) -> List[Dict[str, Any]]:
     """Последние записи в порядке от новых к старым."""
-    store = load_json(path, {"events": []})
+    store = load_json(path, {"events": []}, allow_recovery=False)
     entries = store.get("events", []) if isinstance(store, dict) else []
     rows = [entry for entry in entries if isinstance(entry, dict)]
     return list(reversed(rows[-max(1, limit) :]))
@@ -128,7 +128,7 @@ async def export_csv_bytes(path: Path) -> bytes:
 
 def _export_csv_bytes_sync(path: Path) -> bytes:
     """Выгрузить журнал для локального контролируемого хранения."""
-    store = load_json(path, {"events": []})
+    store = load_json(path, {"events": []}, allow_recovery=False)
     rows = store.get("events", []) if isinstance(store, dict) else []
     rows = [entry for entry in rows if isinstance(entry, dict)]
 

@@ -99,7 +99,7 @@ def pop_recovery_events() -> list[dict[str, str]]:
 
 
 @_serialized
-def load_json(path: Path, default: Any) -> Any:
+def load_json(path: Path, default: Any, *, allow_recovery: bool = True) -> Any:
     path = Path(path)
     staged = getattr(_LOCAL, "staged", None)
     if staged is not None and str(path.resolve()) in staged:
@@ -114,6 +114,8 @@ def load_json(path: Path, default: Any) -> Any:
         try:
             return json.loads(original)
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            if not allow_recovery:
+                raise JsonStorageError("Invalid transaction participant; restore a consistent snapshot") from error
             for candidate in _backup_paths(path):
                 try:
                     payload = candidate.read_bytes()
