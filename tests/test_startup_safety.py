@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -6,6 +7,22 @@ import bot
 
 
 class StartupSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_cancels_both_background_tasks(self):
+        stopped = []
+        async def background(name):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.append(name)
+        application = SimpleNamespace(bot_data={
+            'technical_heartbeat_task': asyncio.create_task(background('heartbeat')),
+            'notification_outbox_task': asyncio.create_task(background('outbox')),
+        })
+        await asyncio.sleep(0)
+        await bot._stop_technical_heartbeat(application)
+        self.assertEqual(set(stopped), {'heartbeat','outbox'})
+        self.assertEqual(application.bot_data, {})
+
     async def test_post_init_preserves_pending_updates(self):
         application = SimpleNamespace(
             bot=SimpleNamespace(delete_webhook=AsyncMock(), get_me=AsyncMock(
@@ -18,6 +35,7 @@ class StartupSafetyTests(unittest.IsolatedAsyncioTestCase):
              patch.object(bot, "sync_bot_commands", new=AsyncMock(return_value=5)), \
              patch.object(bot, "_schedule_reports"), \
              patch.object(bot, "heartbeat_loop", new=AsyncMock()), \
+             patch.object(bot.notification_outbox, "worker_loop", new=AsyncMock()), \
              patch.object(bot, "_notify_storage_recoveries", new=AsyncMock()):
             try:
                 await bot._maranius_post_init(application)

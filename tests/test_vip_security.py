@@ -80,6 +80,10 @@ class VipCodeTests(unittest.IsolatedAsyncioTestCase):
         audit.assert_awaited_once_with("vip_grant_from_alert", 1835235749, "TDO070726R")
 
     async def test_admin_notifications_make_text_copyable_and_returned_name_clickable(self):
+        queue_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(queue_temp.cleanup)
+        queue_path = patch.object(admin_alerts.notification_outbox, "OUTBOX_FILE", Path(queue_temp.name) / "outbox.json")
+        queue_path.start(); self.addCleanup(queue_path.stop)
         bot_mock = SimpleNamespace(send_message=AsyncMock())
         await admin_alerts.notify_inbox_entry(
             bot_mock,
@@ -89,6 +93,7 @@ class VipCodeTests(unittest.IsolatedAsyncioTestCase):
             entry_type="unknown_command",
             text="TDO070726R",
         )
+        await admin_alerts.notification_outbox.deliver_due(bot_mock)
         inbox_text = bot_mock.send_message.await_args.kwargs["text"]
         self.assertIn("<code>TDO070726R</code>", inbox_text)
 
@@ -101,6 +106,7 @@ class VipCodeTests(unittest.IsolatedAsyncioTestCase):
             first_name="Екатерина",
             source="legacy_broadcast_delivery_2026-09-01",
         )
+        await admin_alerts.notification_outbox.deliver_due(bot_mock)
         return_text = bot_mock.send_message.await_args.kwargs["text"]
         self.assertIn('href="tg://user?id=1835235749"', return_text)
 

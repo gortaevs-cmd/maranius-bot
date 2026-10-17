@@ -23,3 +23,5 @@ __pycache__/
 *.pyd
 .Python
 data/angelic/unknown_angelic.csv
+
+notification_outbox.json

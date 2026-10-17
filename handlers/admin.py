@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 import ui
 from handlers import vip as vip_handlers
-from integrations import admin_audit, consent_log, inbox as inbox_mod, user_registry, vip_codes
+from integrations import admin_audit, consent_log, inbox as inbox_mod, user_registry, vip_codes, notification_outbox
 from integrations.diagnostics import log_error
 
 VIP_CODES_AUDIT_REASON = "Добавление VIP-кодов через админ-панель"
@@ -631,11 +631,15 @@ class AdminHandlers:
         me = await context.bot.get_me()
         username = me.username or "?"
         cmd_count = len(ui.get_bot_commands())
+        delivery = await notification_outbox.stats()
         await message.reply_text(
             ui.ADMIN_STATUS.format(
                 profile=self.bot_profile(),
                 username=username,
                 cmd_count=cmd_count,
+            ) + (
+                f"\nУведомления: ожидают {delivery['pending']}, ошибок {delivery['failed']}, "
+                f"истёк срок {delivery['expired']}"
             ),
             parse_mode="HTML",
             reply_markup=ui.get_admin_bot_keyboard(),

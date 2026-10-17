@@ -31,6 +31,7 @@ from integrations import (
     inbox as inbox_mod,
     legacy_contacts,
     platform_db,
+    notification_outbox,
     referrals,
     user_registry,
     vip_codes,
@@ -815,6 +816,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 username=user.username,
                 entry_type="unknown_angel",
                 text=key.strip(),
+                entry_id=entry["id"],
             )
             if sent:
                 await inbox_mod.mark_notified(entry["id"])
@@ -1353,6 +1355,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             username=user.username,
             entry_type="unknown_command",
             text=text,
+            entry_id=entry["id"],
         )
         if sent:
             await inbox_mod.mark_notified(entry["id"])
@@ -1482,19 +1485,28 @@ async def _maranius_post_init(application: Application) -> None:
         heartbeat_loop(application.bot, SEED_ADMIN_IDS, "Maranius"),
         name="technical-heartbeat",
     )
+    application.bot_data["notification_outbox_task"] = asyncio.create_task(
+        notification_outbox.worker_loop(application.bot, SEED_ADMIN_IDS), name="notification-outbox",
+    )
+    print("Очередь уведомлений: фоновая доставка включена")
     await _notify_storage_recoveries(application)
     if application.job_queue:
         application.job_queue.run_repeating(_notify_storage_recoveries, interval=60, first=60, name="storage_recovery_alerts")
 
 
 async def _stop_technical_heartbeat(application: Application) -> None:
-    task = application.bot_data.pop("technical_heartbeat_task", None)
-    if task is not None:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    tasks = [application.bot_data.pop(name, None) for name in (
+        "technical_heartbeat_task", "notification_outbox_task",
+    )]
+    for task in tasks:
+        if task is not None:
+            task.cancel()
+    for task in tasks:
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def main() -> None:

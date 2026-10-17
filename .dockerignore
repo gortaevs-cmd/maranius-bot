@@ -30,3 +30,5 @@ data/vip/pdf_file_ids.json
 data/.json-backups/
 data/angelic/.json-backups/
 data/vip/.json-backups/
+
+notification_outbox.json
