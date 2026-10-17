@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import bot
 from integrations import analytics
@@ -69,12 +69,12 @@ class CalendarMonthTests(unittest.IsolatedAsyncioTestCase):
         now = datetime(2026, 3, 1, 12, tzinfo=timezone.utc)
         st = {"real": 20, "new_7d": 8, "active_7": 2, "active_30": 3, "sleeping": 17,
               "vip": 5, "no_policy": 4, "marketing": 1}
-        with patch.object(bot, "datetime") as clock, \
-             patch.object(bot, "_user_stats", return_value=st), \
+        with patch.object(bot.report_handlers, "datetime") as clock, \
+             patch.object(bot._reports, "user_stats", return_value=st), \
              patch.object(bot.inbox_mod, "stats", new=AsyncMock(return_value=(4, 2))), \
              patch.object(bot.admin_alerts, "notify_seed_admins", new=AsyncMock()) as notify:
             clock.now.return_value = now
-            await bot._send_monthly_report(SimpleNamespace(bot="fake"))
+            await bot._reports._send_monthly_report(SimpleNamespace(bot="fake"))
         text = notify.await_args.args[2]
         self.assertIn("02.2026", text)
         self.assertIn("Событий: 1 · пользователей: 1", text)
@@ -93,3 +93,16 @@ class CalendarMonthTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(analytics, "datetime", wraps=datetime) as clock:
             clock.now.return_value = datetime(2026, 10, 17, tzinfo=timezone.utc)
             self.assertEqual(analytics.period_stats(7)["events"], 1)
+
+    async def test_monthly_job_sends_only_on_first_day(self):
+        run_daily = Mock()
+        bot._schedule_reports(SimpleNamespace(job_queue=SimpleNamespace(run_daily=run_daily)))
+        job = next(call.args[0] for call in run_daily.call_args_list if call.kwargs["name"] == "monthly_report")
+        with patch.object(bot.report_handlers, "datetime") as clock, \
+             patch.object(bot._reports, "_send_monthly_report", new=AsyncMock()) as send:
+            clock.now.return_value = SimpleNamespace(day=2)
+            await job("context")
+            send.assert_not_awaited()
+            clock.now.return_value = SimpleNamespace(day=1)
+            await job("context")
+            send.assert_awaited_once_with("context")
