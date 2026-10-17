@@ -32,6 +32,7 @@ from integrations import (
     legacy_contacts,
     platform_db,
     notification_outbox,
+    runtime_health,
     referrals,
     user_registry,
     vip_codes,
@@ -1409,22 +1410,30 @@ async def _maranius_post_init(application: Application) -> None:
     print(f"Seed-админы: {sorted(SEED_ADMIN_IDS)}")
     print(f"Seed-VIP: {sorted(SEED_ADMIN_IDS)}")
     _schedule_reports(application)
+    health = runtime_health.RuntimeHealth()
+    application.bot_data["runtime_health"] = health
     application.bot_data["technical_heartbeat_task"] = asyncio.create_task(
-        heartbeat_loop(application.bot, SEED_ADMIN_IDS, "Maranius"),
+        heartbeat_loop(application.bot, SEED_ADMIN_IDS, "Maranius", progress=health.progress["heartbeat"].beat),
         name="technical-heartbeat",
     )
     application.bot_data["notification_outbox_task"] = asyncio.create_task(
-        notification_outbox.worker_loop(application.bot, SEED_ADMIN_IDS), name="notification-outbox",
+        notification_outbox.worker_loop(application.bot, SEED_ADMIN_IDS, watchdog=health.progress["outbox"]), name="notification-outbox",
     )
     print("Очередь уведомлений: фоновая доставка включена")
     await _notify_storage_recoveries(application)
     if application.job_queue:
         application.job_queue.run_repeating(_notify_storage_recoveries, interval=60, first=60, name="storage_recovery_alerts")
+        application.job_queue.run_repeating(runtime_health.scheduler_tick, interval=15, first=1, name="runtime_health_tick")
+    application.bot_data["runtime_health_task"] = asyncio.create_task(health.run(application), name="runtime-health")
+    print("Runtime healthcheck: event loop, задачи, планировщик и хранилище включены")
 
 
 async def _stop_technical_heartbeat(application: Application) -> None:
+    health = application.bot_data.pop("runtime_health", None)
+    if health is not None:
+        health.stopping = True
     tasks = [application.bot_data.pop(name, None) for name in (
-        "technical_heartbeat_task", "notification_outbox_task",
+        "technical_heartbeat_task", "notification_outbox_task", "runtime_health_task",
     )]
     for task in tasks:
         if task is not None:
@@ -1435,6 +1444,17 @@ async def _stop_technical_heartbeat(application: Application) -> None:
                 await task
             except asyncio.CancelledError:
                 pass
+            except Exception as exc:
+                # One crashed worker must not prevent draining the other tasks.
+                log_error("background_task_stopped", exc)
+    if health is not None:
+        try:
+            from integrations.json_storage import finish_storage_operation
+            await finish_storage_operation(asyncio.to_thread(
+                runtime_health.write_snapshot, health.snapshot(application), health.path,
+            ))
+        except Exception as exc:
+            log_error("runtime_health_shutdown_failed", exc)
 
 
 def main() -> None:

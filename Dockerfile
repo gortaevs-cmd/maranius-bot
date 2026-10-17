@@ -14,6 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . ./
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import pathlib, sys; sys.exit(0 if any(b'python\\x00bot.py\\x00' in path.read_bytes() for path in pathlib.Path('/proc').glob('[0-9]*/cmdline')) else 1)"]
+    CMD ["python", "scripts/check_health.py"]
 
 CMD ["python", "bot.py"]

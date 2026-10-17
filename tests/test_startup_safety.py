@@ -7,7 +7,7 @@ import bot
 
 
 class StartupSafetyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_stop_cancels_both_background_tasks(self):
+    async def test_stop_cancels_all_background_tasks(self):
         stopped = []
         async def background(name):
             try:
@@ -17,17 +17,18 @@ class StartupSafetyTests(unittest.IsolatedAsyncioTestCase):
         application = SimpleNamespace(bot_data={
             'technical_heartbeat_task': asyncio.create_task(background('heartbeat')),
             'notification_outbox_task': asyncio.create_task(background('outbox')),
+            'runtime_health_task': asyncio.create_task(background('health')),
         })
         await asyncio.sleep(0)
         await bot._stop_technical_heartbeat(application)
-        self.assertEqual(set(stopped), {'heartbeat','outbox'})
+        self.assertEqual(set(stopped), {'heartbeat','outbox','health'})
         self.assertEqual(application.bot_data, {})
 
     async def test_post_init_preserves_pending_updates(self):
         application = SimpleNamespace(
             bot=SimpleNamespace(delete_webhook=AsyncMock(), get_me=AsyncMock(
                 return_value=SimpleNamespace(username="TestBot", id=123456))),
-            bot_data={}, job_queue=None,
+            bot_data={}, job_queue=None, running=False, updater=None,
         )
         with patch.object(bot, "ensure_seed_admins"), patch.object(bot, "ensure_seed_vip"), \
              patch.object(bot, "_apply_pending_legacy_migration", return_value=None), \
@@ -36,12 +37,34 @@ class StartupSafetyTests(unittest.IsolatedAsyncioTestCase):
              patch.object(bot, "_schedule_reports"), \
              patch.object(bot, "heartbeat_loop", new=AsyncMock()), \
              patch.object(bot.notification_outbox, "worker_loop", new=AsyncMock()), \
+             patch.object(bot.runtime_health, "process_start", return_value="test"), \
+             patch.object(bot.runtime_health.RuntimeHealth, "run", new=AsyncMock()), \
+             patch.object(bot.runtime_health, "write_snapshot"), \
              patch.object(bot, "_notify_storage_recoveries", new=AsyncMock()):
             try:
                 await bot._maranius_post_init(application)
                 application.bot.delete_webhook.assert_awaited_once_with(drop_pending_updates=False)
             finally:
                 await bot._stop_technical_heartbeat(application)
+
+    async def test_crashed_worker_does_not_prevent_shutdown_of_other_tasks(self):
+        stopped = asyncio.Event()
+        async def crashed():
+            raise RuntimeError('private payload')
+        async def waiting():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+        application = SimpleNamespace(bot_data={
+            'technical_heartbeat_task': asyncio.create_task(crashed()),
+            'notification_outbox_task': asyncio.create_task(waiting()),
+        })
+        await asyncio.sleep(0)
+        with self.assertLogs('integrations.diagnostics', level='ERROR') as logs:
+            await bot._stop_technical_heartbeat(application)
+        self.assertTrue(stopped.is_set())
+        self.assertNotIn('private payload', '\n'.join(logs.output))
 
 
 class PollingSafetyTests(unittest.TestCase):

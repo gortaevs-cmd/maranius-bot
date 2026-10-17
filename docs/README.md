@@ -18,6 +18,7 @@
 | Хранение JSON | [`../integrations/json_storage.py`](../integrations/json_storage.py) | Атомарная запись/восстановление, журнал нескольких JSON, обязательные backup и отменобезопасный ввод-вывод |
 | Бизнес-операции | [`../integrations/business_events.py`](../integrations/business_events.py) | Общие транзакции профиля, legacy, VIP-кодов и Inbox с очередью |
 | Очередь уведомлений | [`../integrations/notification_outbox.py`](../integrations/notification_outbox.py) | Сохранение уведомлений владельцам, отложенные повторы и отметка доставки Inbox |
+| Работоспособность | [`../integrations/runtime_health.py`](../integrations/runtime_health.py), [`../scripts/check_health.py`](../scripts/check_health.py) | Прогресс задач/планировщика, проверка хранилища и очереди в процессе бота; read-only Docker probe |
 | Реферальная программа | [`../integrations/referrals.py`](../integrations/referrals.py) | Коды, qualification, ledger и заявки на награды |
 | События чатов | [`../events/`](../events/) | Подписки, реакции, `events.json` |
 

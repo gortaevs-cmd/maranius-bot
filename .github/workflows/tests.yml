@@ -36,3 +36,12 @@ jobs:
           persist-credentials: false
       - name: Build image
         run: docker build --tag maranius-bot:test .
+      - name: Health probe rejects an unstarted application without network or writes
+        run: |
+          set +e
+          output=$(docker run --rm --network none --read-only --entrypoint python maranius-bot:test scripts/check_health.py 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 1
+          test "$output" = 'runtime_health=snapshot_unavailable'

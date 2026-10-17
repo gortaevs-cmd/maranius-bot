@@ -212,7 +212,7 @@ def _record(store: dict, action: dict, state: str, *, delay: float = 0, error_ty
     raise JsonStorageError("Notification disappeared during delivery")
 
 
-async def deliver_due(bot, *, limit: int = _BATCH_SIZE, allowed_recipients=None) -> int:
+async def deliver_due(bot, *, limit: int = _BATCH_SIZE, allowed_recipients=None, progress=None) -> int:
     """One bounded pass. Other callers never send the same item concurrently."""
     if _WORKER_LOCK.locked():
         return 0
@@ -220,6 +220,8 @@ async def deliver_due(bot, *, limit: int = _BATCH_SIZE, allowed_recipients=None)
     async with _WORKER_LOCK:
         for _ in range(limit):
             action = await run_storage_io(_transaction, _claim)
+            if progress is not None:
+                progress()
             if action is None:
                 break
             if action["kind"] == "ack":
@@ -275,12 +277,38 @@ async def stats() -> dict[str, int]:
     return await run_storage_io(_transaction, count)
 
 
-async def worker_loop(bot, seed_admin_ids) -> None:
+def _health_summary(store: dict) -> dict:
+    """Read-only counts; no pruning, payloads, recipient IDs or sends."""
+    now = _now()
+    result = {state: sum(i["state"] == state for i in store["items"])
+              for state in ("pending", "sent", "failed", "expired")}
+    due = []
+    for item in store["items"]:
+        if item["state"] != "pending":
+            continue
+        if all(r["state"] == "sent" for r in item["recipients"]):
+            due.append(item.get("ack_next_at", 0))
+        else:
+            times = [max(r["next_at"], store["next_allowed_at"]) for r in item["recipients"] if r["state"] == "pending"]
+            # A failed item still needs worker finalization; expiration also
+            # becomes actionable independently of Telegram's global pause.
+            due.append(min(times + [item["created_at"] + RETENTION_SECONDS]) if times else 0)
+    result["due"] = sum(stamp <= now for stamp in due)
+    result["oldest_due_seconds"] = max(0, now - min(due)) if due else 0
+    return result
+
+
+async def worker_loop(bot, seed_admin_ids, *, watchdog=None) -> None:
     allowed = frozenset(uid for uid in seed_admin_ids if type(uid) is int and uid > 0)
     while True:
         try:
-            await deliver_due(bot, allowed_recipients=allowed)
+            await deliver_due(bot, allowed_recipients=allowed, progress=watchdog.beat if watchdog else None)
         except Exception as exc:
+            if watchdog is not None:
+                watchdog.failed = True
             # A broken queue must not start a recursive alert-enqueue loop.
             log_error("outbox_worker_failed", exc)
+        else:
+            if watchdog is not None:
+                watchdog.failed = False
         await asyncio.sleep(POLL_SECONDS)

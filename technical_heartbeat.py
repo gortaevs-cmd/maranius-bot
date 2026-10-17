@@ -19,13 +19,15 @@ def next_heartbeat(now: datetime) -> datetime:
     return scheduled
 
 
-async def send_heartbeat(bot, chat_ids, bot_name: str) -> bool:
+async def send_heartbeat(bot, chat_ids, bot_name: str, *, progress=None) -> bool:
     """Send only to owners, retrying temporary failures without logging secrets."""
     delivered = True
     for chat_id in sorted(set(chat_ids)):
         if chat_id <= 0:
             continue
         for attempt in range(3):
+            if progress is not None:
+                progress()
             now = datetime.now(MSK)
             text = (
                 f"✅ {bot_name} работает.\n"
@@ -33,7 +35,8 @@ async def send_heartbeat(bot, chat_ids, bot_name: str) -> bool:
                 f"{now:%d.%m.%Y %H:%M:%S} МСК"
             )
             try:
-                await bot.send_message(chat_id=chat_id, text=text)
+                await bot.send_message(chat_id=chat_id, text=text,
+                                       connect_timeout=5, read_timeout=10, write_timeout=10, pool_timeout=5)
             except (BadRequest, Forbidden) as exc:
                 logger.error(
                     "Heartbeat rejected: bot=%s error_type=%s", bot_name, type(exc).__name__
@@ -57,6 +60,8 @@ async def send_heartbeat(bot, chat_ids, bot_name: str) -> bool:
                     break
                 # A network timeout may mean delivery succeeded; Telegram has no
                 # idempotency key for sendMessage, so a retry can duplicate it.
+                if progress is not None:
+                    progress(wait=delay + 90)
                 await asyncio.sleep(delay)
             else:
                 logger.info("Heartbeat delivered: bot=%s", bot_name)
@@ -64,7 +69,7 @@ async def send_heartbeat(bot, chat_ids, bot_name: str) -> bool:
     return delivered
 
 
-async def heartbeat_loop(bot, chat_ids, bot_name: str) -> None:
+async def heartbeat_loop(bot, chat_ids, bot_name: str, *, progress=None) -> None:
     """Run inside the bot; restarts after 10:00 wait until the next day."""
     owners = tuple(sorted({chat_id for chat_id in chat_ids if chat_id > 0}))
     if not owners:
@@ -74,12 +79,14 @@ async def heartbeat_loop(bot, chat_ids, bot_name: str) -> None:
         scheduled = next_heartbeat(datetime.now(MSK))
         logger.info("Heartbeat scheduled: bot=%s at=%s", bot_name, scheduled.isoformat())
         while True:
+            if progress is not None:
+                progress()
             delay = (scheduled - datetime.now(MSK)).total_seconds()
             if delay <= 0:
                 break
             # Recheck wall time so clock adjustments do not shift the schedule.
             await asyncio.sleep(min(delay, 60))
         if datetime.now(MSK) - scheduled < timedelta(minutes=10):
-            await send_heartbeat(bot, owners, bot_name)
+            await send_heartbeat(bot, owners, bot_name, progress=progress)
         # Ensure the next iteration cannot reuse the same scheduled instant.
         await asyncio.sleep(1)
