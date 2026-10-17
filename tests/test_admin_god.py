@@ -123,13 +123,13 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
             with patch.object(vip_codes, "CODES_FILE", root / "codes.json"), patch.object(
-                bot, "ADMIN_AUDIT_FILE", root / "admin_audit.json"
+                bot._admin_handlers, "audit_file", root / "admin_audit.json"
             ):
-                await bot._admin_confirm_batch(update, context)
+                await bot._admin_handlers._admin_confirm_batch(update, context)
                 self.assertEqual(await vip_codes.counts(), (2, 0))
                 rows = await admin_audit.recent(root / "admin_audit.json")
             self.assertEqual(rows[0]["action"], "vip_codes_added")
-            self.assertEqual(rows[0]["reason"], bot.VIP_CODES_AUDIT_REASON)
+            self.assertEqual(rows[0]["reason"], bot.admin_handlers.VIP_CODES_AUDIT_REASON)
             message.reply_text.assert_awaited_once()
 
     async def test_adding_codes_moves_straight_to_confirmation(self):
@@ -138,11 +138,11 @@ class AdminAuditTests(unittest.IsolatedAsyncioTestCase):
             update = SimpleNamespace(effective_message=message)
             context = SimpleNamespace(user_data={"admin_mode": "vip_add"})
             with patch.object(vip_codes, "CODES_FILE", Path(tmp) / "codes.json"):
-                await bot._admin_prepare_vip_codes(update, context, "ONE\nTWO")
+                await bot._admin_handlers._admin_prepare_vip_codes(update, context, "ONE\nTWO")
 
             self.assertNotIn("admin_mode", context.user_data)
             batch = context.user_data["admin_batch"]
-            self.assertEqual(batch["reason"], bot.VIP_CODES_AUDIT_REASON)
+            self.assertEqual(batch["reason"], bot.admin_handlers.VIP_CODES_AUDIT_REASON)
             self.assertEqual(batch["preview"], {"added": 2, "duplicates": 0, "skipped": 0})
             self.assertEqual(
                 message.reply_text.call_args.args[0],

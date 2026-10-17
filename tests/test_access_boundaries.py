@@ -119,7 +119,7 @@ class AccessBoundaryTests(unittest.IsolatedAsyncioTestCase):
         update = make_update(next(iter(bot.SEED_ADMIN_IDS)), chat_type="group", text="42")
         self.context.user_data["admin_mode"] = "user_lookup"
         with patch.object(bot, "add_admin", new=AsyncMock()) as add, \
-             patch.object(bot, "_admin_find_user", new=AsyncMock()) as find:
+             patch.object(bot._admin_handlers, "_admin_find_user", new=AsyncMock()) as find:
             await bot.handle_text(update, self.context)
         add.assert_not_awaited()
         find.assert_not_awaited()
