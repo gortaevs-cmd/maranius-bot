@@ -1,110 +1,165 @@
-"""Безопасное чтение и атомарная запись рабочих JSON-файлов."""
+"""Атомарные JSON, проверенные копии и отменобезопасный ввод-вывод."""
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import errno
 import json
 import os
 import tempfile
-import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from integrations.diagnostics import log_error
 
 
 class JsonStorageError(RuntimeError):
-    """Файл есть, но его нельзя безопасно прочитать или записать."""
+    """Файл нельзя безопасно прочитать или записать."""
 
 
 _RECOVERY_EVENTS: list[dict[str, str]] = []
+_EVENT_LOCK = threading.Lock()
+# Fixed-size stripes avoid retaining one lock for every temporary path forever.
+_FILE_LOCKS = tuple(threading.RLock() for _ in range(64))
 BACKUP_LIMIT = 10
+
+
+def _file_lock(path: Path):
+    return _FILE_LOCKS[hash(str(path.resolve())) % len(_FILE_LOCKS)]
 
 
 def _backup_dir(path: Path) -> Path:
     return path.parent / ".json-backups"
 
 
-def _valid_backups(path: Path) -> list[Path]:
-    folder = _backup_dir(path)
-    out = []
-    for candidate in sorted(folder.glob(f"{path.name}.*.bak"), reverse=True):
+def _backup_paths(path: Path) -> list[Path]:
+    return sorted(_backup_dir(path).glob(f"{path.name}.*.bak"), reverse=True)
+
+
+def _fsync_directory(folder: Path) -> None:
+    descriptor = os.open(folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
         try:
-            json.loads(candidate.read_text(encoding="utf-8"))
-            out.append(candidate)
-        except (json.JSONDecodeError, OSError):
-            continue
-    return out
+            os.fsync(descriptor)
+        except OSError as exc:
+            if exc.errno not in {errno.EINVAL, errno.ENOTSUP}:
+                raise
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write(path: Path, payload: bytes, *, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if mode is None:
+        mode = (path.stat().st_mode & 0o777) if path.exists() else 0o600
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as tmp:
+            tmp_name = tmp.name
+            os.fchmod(tmp.fileno(), mode)
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+        _fsync_directory(path.parent)
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def pop_recovery_events() -> list[dict[str, str]]:
-    events = list(_RECOVERY_EVENTS)
-    _RECOVERY_EVENTS.clear()
-    return events
+    with _EVENT_LOCK:
+        events = list(_RECOVERY_EVENTS)
+        _RECOVERY_EVENTS.clear()
+        return events
 
 
 def load_json(path: Path, default: Any) -> Any:
     path = Path(path)
-    if not path.is_file():
-        return copy.deepcopy(default)
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        backups = _valid_backups(path)
-        if not backups:
-            raise JsonStorageError(f"Не удалось прочитать JSON, исправной копии нет: {path}") from exc
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        corrupt = _backup_dir(path) / f"{path.name}.{stamp}.corrupt"
-        corrupt.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, corrupt)
-        shutil.copy2(backups[0], path)
-        data = json.loads(path.read_text(encoding="utf-8"))
-        event = {"file": str(path), "backup": str(backups[0]), "corrupt": str(corrupt)}
-        _RECOVERY_EVENTS.append(event)
-        print(f"JSON RECOVERED: {event}")
-        return data
+    with _file_lock(path):
+        try:
+            original = path.read_bytes()
+        except FileNotFoundError:
+            return copy.deepcopy(default)
+        except OSError as exc:
+            raise JsonStorageError(f"Не удалось прочитать JSON: {path}") from exc
+        try:
+            return json.loads(original)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            for candidate in _backup_paths(path):
+                try:
+                    payload = candidate.read_bytes()
+                    data = json.loads(payload)
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                corrupt = _backup_dir(path) / f"{path.name}.{stamp}.corrupt"
+                try:
+                    _atomic_write(corrupt, original, mode=0o600)
+                    _atomic_write(path, payload)
+                except OSError as exc:
+                    raise JsonStorageError(f"Не удалось восстановить JSON: {path}") from exc
+                event = {"file": str(path), "backup": str(candidate), "corrupt": str(corrupt)}
+                with _EVENT_LOCK:
+                    _RECOVERY_EVENTS.append(event)
+                print(f"JSON RECOVERED: {event}")
+                return data
+            raise JsonStorageError(f"Не удалось прочитать JSON, исправной копии нет: {path}") from error
 
 
 def save_json(path: Path, data: Any, *, trailing_newline: bool = False) -> None:
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        payload = json.dumps(data, ensure_ascii=False, indent=2)
-    except (TypeError, ValueError) as exc:
+        payload = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
+        raw = (payload + ("\n" if trailing_newline else "")).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
         raise JsonStorageError(f"Не удалось сериализовать JSON: {path}") from exc
-    if trailing_newline:
-        payload += "\n"
-
-    tmp_name = ""
-    try:
-        if path.is_file():
+    with _file_lock(path):
+        try:
             try:
-                json.loads(path.read_text(encoding="utf-8"))
-                folder = _backup_dir(path)
-                folder.mkdir(parents=True, exist_ok=True)
+                previous = path.read_bytes()
+            except FileNotFoundError:
+                previous = None
+            if previous is not None:
+                # Never overwrite corruption or silently skip a failed backup.
+                json.loads(previous)
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-                shutil.copy2(path, folder / f"{path.name}.{stamp}.bak")
-                for old in _valid_backups(path)[BACKUP_LIMIT:]:
+                _atomic_write(_backup_dir(path) / f"{path.name}.{stamp}.bak", previous, mode=0o600)
+            _atomic_write(path, raw)
+            # Rotation needs filenames only; do not parse ten full copies on each save.
+            for old in _backup_paths(path)[BACKUP_LIMIT:]:
+                try:
                     old.unlink(missing_ok=True)
-            except (json.JSONDecodeError, OSError):
-                pass
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tmp:
-            tmp_name = tmp.name
-            tmp.write(payload)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        os.chmod(tmp_name, path.stat().st_mode & 0o777 if path.exists() else 0o600)
-        os.replace(tmp_name, path)
-    except OSError as exc:
-        if tmp_name:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-        raise JsonStorageError(f"Не удалось атомарно записать JSON: {path}") from exc
+                except OSError as exc:
+                    log_error("storage_backup_rotation_failed", exc)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise JsonStorageError(f"Не удалось безопасно записать JSON: {path}") from exc
+
+
+async def run_storage_io(operation: Callable[..., Any], *args, **kwargs) -> Any:
+    """Keep the caller's transaction lock until the thread really finishes.
+
+    Cancelling asyncio.to_thread alone does not stop disk I/O. Shield and drain
+    it before propagating cancellation, including repeated shutdown requests.
+    """
+    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+        except Exception as exc:
+            if cancelled:
+                log_error("cancelled_storage_io_failed", exc)
+                raise asyncio.CancelledError() from None
+            raise
+        else:
+            if cancelled:
+                raise asyncio.CancelledError()
+            return result

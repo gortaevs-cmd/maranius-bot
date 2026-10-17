@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, save_json, run_storage_io
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -58,108 +58,123 @@ async def get_or_create_user(
     name: Optional[str] = None,
     phone: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Найти или создать пользователя. Возвращает запись пользователя или None."""
     async with _platform_db_lock:
-        data = _load_platform_users()
-        users = data.setdefault("users", {})
-        by_email = data.setdefault("by_email", {})
-        by_telegram = data.setdefault("by_telegram", {})
+        return await run_storage_io(_get_or_create_user_sync, email=email, telegram_id=telegram_id, name=name, phone=phone)
 
-        now = _now_iso()
-        user_id: Optional[str] = None
 
-        # Поиск по имеющимся идентификаторам
-        if email:
-            user_id = by_email.get(email.lower().strip())
-        if not user_id and telegram_id is not None:
-            user_id = by_telegram.get(str(telegram_id))
-
-        if user_id and user_id in users:
-            user = users[user_id].copy()
-            updated = False
-            if email and not user.get("email"):
-                user["email"] = email
-                updated = True
-            if telegram_id is not None and user.get("telegram_id") != telegram_id:
-                user["telegram_id"] = telegram_id
-                updated = True
-            if name and not user.get("name"):
-                user["name"] = name
-                updated = True
-            if phone is not None and user.get("phone") != phone:
-                user["phone"] = phone
-                updated = True
-            if updated:
-                user["updated_at"] = now
-                sources = set(user.get("sources", []))
-                if telegram_id is not None:
-                    sources.add("telegram")
-                user["sources"] = list(sources)
-                users[user_id] = user
-                _rebuild_indices(data)
-                _save_platform_users(data)
-            return user
-
-        # Создание нового пользователя
-        if not email and telegram_id is None:
-            return None
-
-        user_id = str(uuid.uuid4())
-        sources: List[str] = []
-        if telegram_id is not None:
-            sources.append("telegram")
-
-        user = {
-            "id": user_id,
-            "email": email or None,
-            "telegram_id": telegram_id,
-            "name": name or None,
-            "phone": phone or None,
-            "created_at": now,
-            "updated_at": now,
-            "sources": sources,
-            "metadata": {},
-        }
-        users[user_id] = user
-        _rebuild_indices(data)
-        _save_platform_users(data)
+def _get_or_create_user_sync(
+    email: Optional[str] = None,
+    telegram_id: Optional[int] = None,
+    name: Optional[str] = None,
+    phone: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Найти или создать пользователя. Возвращает запись пользователя или None."""
+    data = _load_platform_users()
+    users = data.setdefault("users", {})
+    by_email = data.setdefault("by_email", {})
+    by_telegram = data.setdefault("by_telegram", {})
+    now = _now_iso()
+    user_id: Optional[str] = None
+    # Поиск по имеющимся идентификаторам
+    if email:
+        user_id = by_email.get(email.lower().strip())
+    if not user_id and telegram_id is not None:
+        user_id = by_telegram.get(str(telegram_id))
+    if user_id and user_id in users:
+        user = users[user_id].copy()
+        updated = False
+        if email and not user.get("email"):
+            user["email"] = email
+            updated = True
+        if telegram_id is not None and user.get("telegram_id") != telegram_id:
+            user["telegram_id"] = telegram_id
+            updated = True
+        if name and not user.get("name"):
+            user["name"] = name
+            updated = True
+        if phone is not None and user.get("phone") != phone:
+            user["phone"] = phone
+            updated = True
+        if updated:
+            user["updated_at"] = now
+            sources = set(user.get("sources", []))
+            if telegram_id is not None:
+                sources.add("telegram")
+            user["sources"] = list(sources)
+            users[user_id] = user
+            _rebuild_indices(data)
+            _save_platform_users(data)
         return user
+    # Создание нового пользователя
+    if not email and telegram_id is None:
+        return None
+    user_id = str(uuid.uuid4())
+    sources: List[str] = []
+    if telegram_id is not None:
+        sources.append("telegram")
+    user = {
+        "id": user_id,
+        "email": email or None,
+        "telegram_id": telegram_id,
+        "name": name or None,
+        "phone": phone or None,
+        "created_at": now,
+        "updated_at": now,
+        "sources": sources,
+        "metadata": {},
+    }
+    users[user_id] = user
+    _rebuild_indices(data)
+    _save_platform_users(data)
+    return user
 
 
 async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    """Поиск пользователя по email."""
     async with _platform_db_lock:
-        data = _load_platform_users()
-        user_id = data.get("by_email", {}).get(email.lower().strip())
-        if user_id:
-            return data.get("users", {}).get(user_id, {}).copy()
+        return await run_storage_io(_find_user_by_email_sync, email=email)
+
+
+def _find_user_by_email_sync(email: str) -> Optional[Dict[str, Any]]:
+    """Поиск пользователя по email."""
+    data = _load_platform_users()
+    user_id = data.get("by_email", {}).get(email.lower().strip())
+    if user_id:
+        return data.get("users", {}).get(user_id, {}).copy()
     return None
 
 
 async def find_user_by_telegram(telegram_id: int) -> Optional[Dict[str, Any]]:
-    """Поиск пользователя по Telegram ID."""
     async with _platform_db_lock:
-        data = _load_platform_users()
-        user_id = data.get("by_telegram", {}).get(str(telegram_id))
-        if user_id:
-            return data.get("users", {}).get(user_id, {}).copy()
+        return await run_storage_io(_find_user_by_telegram_sync, telegram_id=telegram_id)
+
+
+def _find_user_by_telegram_sync(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Поиск пользователя по Telegram ID."""
+    data = _load_platform_users()
+    user_id = data.get("by_telegram", {}).get(str(telegram_id))
+    if user_id:
+        return data.get("users", {}).get(user_id, {}).copy()
     return None
 
 
 async def link_telegram(user_id: str, telegram_id: int) -> bool:
-    """Связать запись пользователя с Telegram."""
     async with _platform_db_lock:
-        data = _load_platform_users()
-        users = data.get("users", {})
-        if user_id not in users:
-            return False
-        users[user_id]["telegram_id"] = telegram_id
-        users[user_id]["updated_at"] = _now_iso()
-        if "telegram" not in users[user_id].get("sources", []):
-            users[user_id]["sources"] = users[user_id].get("sources", []) + ["telegram"]
-        _rebuild_indices(data)
-        _save_platform_users(data)
-        return True
+        return await run_storage_io(_link_telegram_sync, user_id=user_id, telegram_id=telegram_id)
+
+
+def _link_telegram_sync(user_id: str, telegram_id: int) -> bool:
+    """Связать запись пользователя с Telegram."""
+    data = _load_platform_users()
+    users = data.get("users", {})
+    if user_id not in users:
+        return False
+    users[user_id]["telegram_id"] = telegram_id
+    users[user_id]["updated_at"] = _now_iso()
+    if "telegram" not in users[user_id].get("sources", []):
+        users[user_id]["sources"] = users[user_id].get("sources", []) + ["telegram"]
+    _rebuild_indices(data)
+    _save_platform_users(data)
+    return True
 
 
 async def add_user_course(
@@ -169,24 +184,38 @@ async def add_user_course(
     status: str = "active",
     source: str = "api",
 ) -> None:
-    """Добавить запись о курсе пользователя."""
     async with _platform_db_lock:
-        data = _load_user_courses()
-        enrollments = data.setdefault("enrollments", [])
-        enrollments.append({
-            "user_id": user_id,
-            "course_id": course_id,
-            "course_name": course_name or "",
-            "enrolled_at": _now_iso(),
-            "status": status,
-            "source": source,
-        })
-        _save_user_courses(data)
+        return await run_storage_io(_add_user_course_sync, user_id=user_id, course_id=course_id, course_name=course_name, status=status, source=source)
+
+
+def _add_user_course_sync(
+    user_id: str,
+    course_id: str,
+    course_name: Optional[str] = None,
+    status: str = "active",
+    source: str = "api",
+) -> None:
+    """Добавить запись о курсе пользователя."""
+    data = _load_user_courses()
+    enrollments = data.setdefault("enrollments", [])
+    enrollments.append({
+        "user_id": user_id,
+        "course_id": course_id,
+        "course_name": course_name or "",
+        "enrolled_at": _now_iso(),
+        "status": status,
+        "source": source,
+    })
+    _save_user_courses(data)
 
 
 async def get_user_courses(user_id: str) -> List[Dict[str, Any]]:
-    """Получить курсы пользователя."""
     async with _platform_db_lock:
-        data = _load_user_courses()
-        enrollments = data.get("enrollments", [])
-        return [e for e in enrollments if e.get("user_id") == user_id]
+        return await run_storage_io(_get_user_courses_sync, user_id=user_id)
+
+
+def _get_user_courses_sync(user_id: str) -> List[Dict[str, Any]]:
+    """Получить курсы пользователя."""
+    data = _load_user_courses()
+    enrollments = data.get("enrollments", [])
+    return [e for e in enrollments if e.get("user_id") == user_id]

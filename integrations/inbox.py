@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from integrations.csv_export import SafeCsvWriter
-from integrations.json_storage import load_json, save_json
+from integrations.json_storage import load_json, save_json, run_storage_io
 
 _LOCK = asyncio.Lock()
 _BASE = Path(__file__).resolve().parent.parent
@@ -42,7 +42,11 @@ def _save_unlocked(data: Dict[str, Any]) -> None:
 
 async def load_store() -> Dict[str, Any]:
     async with _LOCK:
-        return _load_unlocked()
+        return await run_storage_io(_load_store_sync)
+
+
+def _load_store_sync() -> Dict[str, Any]:
+    return _load_unlocked()
 
 
 def _purge_old_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -72,6 +76,18 @@ async def add_entry(
     text: str,
     meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    async with _LOCK:
+        return await run_storage_io(_add_entry_sync, entry_type=entry_type, user_id=user_id, username=username, text=text, meta=meta)
+
+
+def _add_entry_sync(
+    *,
+    entry_type: str,
+    user_id: int,
+    username: Optional[str],
+    text: str,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Добавить запись inbox. Returns entry dict."""
     entry = {
         "id": uuid.uuid4().hex[:12],
@@ -84,25 +100,29 @@ async def add_entry(
         "exported_at": None,
         "admin_notified_at": None,
     }
-    async with _LOCK:
-        data = _load_unlocked()
-        entries = data.get("entries", [])
-        if not isinstance(entries, list):
-            entries = []
-        entries.append(entry)
-        data["entries"] = _purge_old_entries(entries)
-        _save_unlocked(data)
+    data = _load_unlocked()
+    entries = data.get("entries", [])
+    if not isinstance(entries, list):
+        entries = []
+    entries.append(entry)
+    data["entries"] = _purge_old_entries(entries)
+    _save_unlocked(data)
     return entry
 
 
 async def mark_notified(entry_id: str) -> None:
     async with _LOCK:
-        data = _load_unlocked()
-        for row in data.get("entries", []):
-            if isinstance(row, dict) and row.get("id") == entry_id:
+        return await run_storage_io(_mark_notified_sync, entry_id=entry_id)
+
+
+def _mark_notified_sync(entry_id: str) -> None:
+    data = _load_unlocked()
+    for row in data.get("entries", []):
+        if isinstance(row, dict) and row.get("id") == entry_id:
+            if not row.get("admin_notified_at"):
                 row["admin_notified_at"] = _now_iso()
-                break
-        _save_unlocked(data)
+                _save_unlocked(data)
+            return
 
 
 def _entry_notified(row: Dict[str, Any]) -> bool:
@@ -118,18 +138,22 @@ async def stats() -> Tuple[int, int]:
 
 
 async def export_csv_bytes() -> Tuple[bytes, str]:
+    async with _LOCK:
+        return await run_storage_io(_export_csv_bytes_sync)
+
+
+def _export_csv_bytes_sync() -> Tuple[bytes, str]:
     """
     CSV выгрузка: каждой строке downloaded_at = время выгрузки.
     Returns (bytes, download_ts).
     """
     download_ts = _now_iso()
-    async with _LOCK:
-        data = _load_unlocked()
-        entries = [e for e in data.get("entries", []) if isinstance(e, dict)]
-        for row in entries:
-            row["exported_at"] = download_ts
-        data["entries"] = _purge_old_entries(entries)
-        _save_unlocked(data)
+    data = _load_unlocked()
+    entries = [e for e in data.get("entries", []) if isinstance(e, dict)]
+    for row in entries:
+        row["exported_at"] = download_ts
+    data["entries"] = _purge_old_entries(entries)
+    _save_unlocked(data)
 
     import io
 
@@ -167,6 +191,11 @@ async def export_csv_bytes() -> Tuple[bytes, str]:
 
 
 async def migrate_legacy_unknown_csv() -> int:
+    async with _LOCK:
+        return await run_storage_io(_migrate_legacy_unknown_csv_sync)
+
+
+def _migrate_legacy_unknown_csv_sync() -> int:
     """Импорт unknown_angelic.csv → inbox (один раз). Returns imported count."""
     if not LEGACY_UNKNOWN_CSV.is_file() or LEGACY_UNKNOWN_CSV.stat().st_size == 0:
         return 0
@@ -177,42 +206,41 @@ async def migrate_legacy_unknown_csv() -> int:
         for row in reader:
             rows.append(row)
 
-    async with _LOCK:
-        data = _load_unlocked()
-        existing_ids = {
-            (e.get("meta") or {}).get("legacy_csv_row")
-            for e in data.get("entries", [])
-            if isinstance(e, dict)
+    data = _load_unlocked()
+    existing_ids = {
+        (e.get("meta") or {}).get("legacy_csv_row")
+        for e in data.get("entries", [])
+        if isinstance(e, dict)
+    }
+    entries = data.get("entries", [])
+    if not isinstance(entries, list):
+        entries = []
+    for i, row in enumerate(rows):
+        legacy_key = f"csv:{i}:{row.get('datetime_utc', '')}:{row.get('normalized', '')}"
+        if legacy_key in existing_ids:
+            continue
+        try:
+            uid = int(row.get("user_id") or 0)
+        except (ValueError, TypeError):
+            uid = 0
+        entry = {
+            "id": uuid.uuid4().hex[:12],
+            "created_at": row.get("datetime_utc") or _now_iso(),
+            "type": "unknown_angel",
+            "user_id": uid,
+            "username": row.get("username") or "",
+            "text": row.get("raw_input") or row.get("normalized") or "",
+            "meta": {
+                "normalized": row.get("normalized", ""),
+                "legacy_csv_row": legacy_key,
+                "migrated_from": "unknown_angelic.csv",
+                "migrated": True,
+            },
+            "exported_at": None,
+            "admin_notified_at": _now_iso(),
         }
-        entries = data.get("entries", [])
-        if not isinstance(entries, list):
-            entries = []
-        for i, row in enumerate(rows):
-            legacy_key = f"csv:{i}:{row.get('datetime_utc', '')}:{row.get('normalized', '')}"
-            if legacy_key in existing_ids:
-                continue
-            try:
-                uid = int(row.get("user_id") or 0)
-            except (ValueError, TypeError):
-                uid = 0
-            entry = {
-                "id": uuid.uuid4().hex[:12],
-                "created_at": row.get("datetime_utc") or _now_iso(),
-                "type": "unknown_angel",
-                "user_id": uid,
-                "username": row.get("username") or "",
-                "text": row.get("raw_input") or row.get("normalized") or "",
-                "meta": {
-                    "normalized": row.get("normalized", ""),
-                    "legacy_csv_row": legacy_key,
-                    "migrated_from": "unknown_angelic.csv",
-                    "migrated": True,
-                },
-                "exported_at": None,
-                "admin_notified_at": _now_iso(),
-            }
-            entries.append(entry)
-            imported += 1
-        data["entries"] = _purge_old_entries(entries)
-        _save_unlocked(data)
+        entries.append(entry)
+        imported += 1
+    data["entries"] = _purge_old_entries(entries)
+    _save_unlocked(data)
     return imported
