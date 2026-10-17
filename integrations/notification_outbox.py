@@ -114,6 +114,12 @@ def _prune(store: dict, now: float) -> bool:
 async def enqueue(recipients, text: str, *, parse_mode: str = "HTML",
                   key: Optional[str] = None, inbox_id: Optional[str] = None) -> bool:
     """Persist before sending. True only for a previously completed same event."""
+    return await run_storage_io(_enqueue_sync, recipients, text, parse_mode=parse_mode, key=key, inbox_id=inbox_id)
+
+
+def _enqueue_sync(recipients, text: str, *, parse_mode: str = "HTML",
+                  key: Optional[str] = None, inbox_id: Optional[str] = None) -> bool:
+    """Persist before sending. True only for a previously completed same event."""
     targets = sorted({uid for uid in recipients if type(uid) is int and uid > 0})
     if not targets:
         return False
@@ -148,7 +154,7 @@ async def enqueue(recipients, text: str, *, parse_mode: str = "HTML",
         })
         _save(store)
         return False
-    return await run_storage_io(_transaction, add)
+    return _transaction(add)
 
 
 def _claim(store: dict):

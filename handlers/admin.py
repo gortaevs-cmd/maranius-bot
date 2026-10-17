@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 import ui
 from handlers import vip as vip_handlers
-from integrations.json_storage import run_storage_io
+from integrations.json_storage import atomic_json, run_storage_io
 from integrations import admin_audit, consent_log, inbox as inbox_mod, user_registry, vip_codes, notification_outbox
 from integrations.diagnostics import log_error
 
@@ -241,10 +241,22 @@ class AdminHandlers:
         reason: str,
         meta: Optional[Dict[str, Any]] = None,
     ) -> None:
+        await run_storage_io(
+            self._audit_admin_action_sync, update, action=action, target_ids=target_ids, reason=reason, meta=meta,
+        )
+
+    def _audit_admin_action_sync(self,
+        update: Update,
+        *,
+        action: str,
+        target_ids=(),
+        reason: str,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
         actor = update.effective_user
         if not actor:
             return
-        await admin_audit.append(
+        admin_audit._append_sync(
             self.audit_file,
             actor_id=actor.id,
             action=action,
@@ -267,11 +279,11 @@ class AdminHandlers:
                 await message.reply_text(ui.ADMIN_USER_PROTECTED)
             return
 
-        changed = False
-        action = ""
-        audit_action = ""
-        async with self.users_lock:
-            users = await run_storage_io(self.load_users)
+        def commit():
+            changed = False
+            action = ""
+            audit_action = ""
+            users = self.load_users()
             if cmd in ("vip", "grant_vip"):
                 changed = user_registry.grant_vip(users, uid, source="admin_grant")
                 action = "VIP выдан" if changed else "VIP уже был выдан"
@@ -290,16 +302,19 @@ class AdminHandlers:
                 user_registry.set_admin_blocked(users, uid, False)
                 action = "ограничение снято" if changed else "ограничения уже не было"
                 audit_action = "user_unblock"
-            await run_storage_io(self.save_users, users)
+            self.save_users(users)
 
-        await self._audit_admin_action(
-            update,
-            action=audit_action,
-            target_ids=[uid],
-            reason=reason,
-            meta={"changed": changed, "source": "god"},
-        )
+            self._audit_admin_action_sync(
+                update,
+                action=audit_action,
+                target_ids=[uid],
+                reason=reason,
+                meta={"changed": changed, "source": "god"},
+            )
 
+            return changed, action
+        async with self.users_lock:
+            changed, action = await run_storage_io(atomic_json, commit)
         if changed and cmd in ("vip", "grant_vip"):
             try:
                 await context.bot.send_message(
@@ -507,13 +522,16 @@ class AdminHandlers:
         if not isinstance(batch, dict) or not message:
             return
         if batch.get("kind") == "vip_codes":
-            added, duplicates, skipped = await vip_codes.add_codes_bulk(batch["raw"])
-            await self._audit_admin_action(
-                update,
-                action="vip_codes_added",
-                reason=batch.get("reason") or VIP_CODES_AUDIT_REASON,
-                meta={"added": added, "duplicates": duplicates, "skipped": skipped},
-            )
+            def commit():
+                added, duplicates, skipped = vip_codes._add_codes_bulk_sync(batch["raw"])
+                self._audit_admin_action_sync(
+                    update,
+                    action="vip_codes_added",
+                    reason=batch.get("reason") or VIP_CODES_AUDIT_REASON,
+                    meta={"added": added, "duplicates": duplicates, "skipped": skipped},
+                )
+                return added, duplicates, skipped
+            added, duplicates, skipped = await run_storage_io(atomic_json, commit)
             await message.reply_text(
                 ui.ADMIN_VIP_ADD_RESULT.format(added=added, dup=duplicates, skipped=skipped),
                 parse_mode="HTML",
@@ -521,27 +539,30 @@ class AdminHandlers:
             )
             return
         if batch.get("kind") == "vip_import":
-            granted = skipped = 0
-            async with self.users_lock:
-                users = await run_storage_io(self.load_users)
+            def commit():
+                granted = skipped = 0
+                users = self.load_users()
                 for uid in batch["ids"]:
                     if user_registry.grant_vip(users, uid, source="import"):
                         granted += 1
                     else:
                         skipped += 1
-                await run_storage_io(self.save_users, users)
-            await self._audit_admin_action(
-                update,
-                action="vip_import",
-                target_ids=batch["ids"],
-                reason=batch["reason"],
-                meta={
-                    "granted": granted,
-                    "already_vip": skipped,
-                    "duplicates": batch["duplicates"],
-                    "invalid": batch["invalid"],
-                },
-            )
+                self.save_users(users)
+                self._audit_admin_action_sync(
+                    update,
+                    action="vip_import",
+                    target_ids=batch["ids"],
+                    reason=batch["reason"],
+                    meta={
+                        "granted": granted,
+                        "already_vip": skipped,
+                        "duplicates": batch["duplicates"],
+                        "invalid": batch["invalid"],
+                    },
+                )
+                return granted, skipped
+            async with self.users_lock:
+                granted, skipped = await run_storage_io(atomic_json, commit)
             await message.reply_text(
                 ui.ADMIN_VIP_IMPORT_RESULT.format(
                     granted=granted,

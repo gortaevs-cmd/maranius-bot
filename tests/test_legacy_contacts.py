@@ -112,44 +112,44 @@ class LegacyReactivationTests(unittest.IsolatedAsyncioTestCase):
                 "user_agreement_version": bot.user_registry.USER_AGREEMENT_VERSION,
             }
         }
-        claimed = AsyncMock(
+        claimed = MagicMock(
             return_value={"source": "legacy_broadcast_delivery_2026-09-01"}
         )
-        notify = AsyncMock()
+        notify = MagicMock()
         platform = AsyncMock()
 
         with (
             patch.object(bot, "_load_users", side_effect=lambda: users),
             patch.object(bot, "_save_users", new=MagicMock()),
             patch.object(
-                bot.legacy_contacts, "claim_returning_inactive_user", new=claimed
+                bot.legacy_contacts, "_claim_returning_inactive_user_sync", new=claimed
             ),
             patch.object(
-                bot.admin_alerts, "notify_legacy_contact_return", new=notify
+                bot.admin_alerts, "_notify_legacy_contact_return_sync", new=notify
             ),
             patch.object(bot.platform_db, "get_or_create_user", new=platform),
         ):
             await bot.ensure_user_saved(update, bot=SimpleNamespace())
 
-        claimed.assert_awaited_once_with(42)
-        notify.assert_awaited_once()
+        claimed.assert_called_once_with(42)
+        notify.assert_called_once()
         self.assertIn("first_seen", users["42"])
 
     async def test_return_is_not_claimed_before_required_documents(self):
         user = SimpleNamespace(id=42)
         update = SimpleNamespace(effective_user=user)
-        claimed = AsyncMock()
+        claimed = MagicMock()
 
         with (
             patch.object(bot, "_load_users", return_value={}),
             patch.object(
-                bot.legacy_contacts, "claim_returning_inactive_user", new=claimed
+                bot.legacy_contacts, "_claim_returning_inactive_user_sync", new=claimed
             ),
         ):
             saved = await bot.ensure_user_saved(update, bot=SimpleNamespace())
 
         self.assertFalse(saved)
-        claimed.assert_not_awaited()
+        claimed.assert_not_called()
 
 
 class PendingMigrationTests(unittest.TestCase):

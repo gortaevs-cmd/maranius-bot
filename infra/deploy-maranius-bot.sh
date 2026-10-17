@@ -17,6 +17,9 @@ backup_runtime() {
   if [[ -d "$app_dir/.runtime" ]]; then
     entries+=(.runtime)
     required+=(.runtime/users.json .runtime/admins.json)
+    if [[ -f "$app_dir/.runtime/storage_transaction.json" ]]; then
+      required+=(.runtime/storage_transaction.json)
+    fi
   else
     required+=(users.json admins.json)
   fi
@@ -28,7 +31,8 @@ backup_runtime() {
   done
   for state_file in users.json admins.json events.json monitored_chats.json \
     admin_audit.json consent_log.json referrals.json legacy_inactive_users.json \
-    legacy_migration_pending.json legacy_migration_last_result.json; do
+    legacy_migration_pending.json legacy_migration_last_result.json \
+    notification_outbox.json storage_transaction.json; do
     if [[ -f "$app_dir/$state_file" ]]; then
       entries+=("$state_file")
     fi
@@ -59,6 +63,49 @@ backup_runtime() {
   fi
 }
 
+# Freezing every process/thread gives a crash-consistent snapshot: a partial
+# multi-file operation always has its complete write-ahead decision in runtime.
+PAUSED_BY_DEPLOY=0
+
+resume_previous() {
+  if [[ "$PAUSED_BY_DEPLOY" == 1 ]]; then
+    docker unpause maranius >/dev/null || return 1
+    PAUSED_BY_DEPLOY=0
+  fi
+}
+
+backup_consistent() {
+  local app_dir=$1 archive_path=$2 state
+  state=$(docker inspect --format '{{.State.Running}} {{.State.Paused}}' maranius 2>/dev/null || true)
+  if [[ "$state" == "true true" ]]; then
+    echo "backup failed: container was already paused" >&2
+    return 1
+  fi
+  if [[ "$state" == "true false" ]]; then
+    PAUSED_BY_DEPLOY=1
+    if ! docker pause maranius >/dev/null; then
+      resume_previous || true
+      return 1
+    fi
+  fi
+  if ! backup_runtime "$app_dir" "$archive_path"; then
+    resume_previous || true
+    return 1
+  fi
+  resume_previous
+}
+
+can_restore_image() {
+  local runtime_dir=$1 image=$2 capability
+  if [[ -e "$runtime_dir/storage_transaction.json" ]]; then
+    capability=$(docker image inspect --format '{{index .Config.Labels "org.maranius.storage-transactions"}}' "$image" 2>/dev/null || true)
+    if [[ "$capability" != 1 ]]; then
+      echo "rollback blocked: pending storage transaction requires a compatible image" >&2
+      return 1
+    fi
+  fi
+}
+
 readonly APP_DIR="/opt/apps/maranius"
 readonly COMPOSE_FILE="$APP_DIR/docker-compose.production.yml"
 readonly IMAGE_REPOSITORY="ghcr.io/gortaevs-cmd/maranius-bot"
@@ -70,7 +117,19 @@ DEPLOY_STARTED=0
 
 rollback() {
   local exit_code=$?
+  resume_previous || true
   if [[ "$DEPLOY_STARTED" == 1 && -n "$PREVIOUS_IMAGE" ]] && docker image inspect "$PREVIOUS_IMAGE" >/dev/null 2>&1; then
+    # Quiesce before examining the journal; a running writer could create it
+    # immediately after a compatibility check.
+    if [[ $(docker inspect --format '{{.State.Running}}' maranius 2>/dev/null || true) == true ]]; then
+      if ! docker stop -t 60 maranius >/dev/null; then
+        echo "rollback blocked: cannot stop the current writer" >&2
+        exit "$exit_code"
+      fi
+    fi
+    if ! can_restore_image "$RUNTIME_DIR" "$PREVIOUS_IMAGE"; then
+      exit "$exit_code"
+    fi
     if [[ "$PREVIOUS_IMAGE" == "$IMAGE_REPOSITORY:"* ]]; then
       previous_tag="${PREVIOUS_IMAGE#"$IMAGE_REPOSITORY:"}"
       printf 'MARANIUS_IMAGE_TAG=%s\n' "$previous_tag" > .rollback.env
@@ -100,6 +159,9 @@ fi
 readonly SHA_SHORT="$(printf %.12s "$SHA")"
 readonly IMAGE="$IMAGE_REPOSITORY:$SHA"
 trap rollback ERR
+trap resume_previous EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 cd "$APP_DIR"
 test -f "$COMPOSE_FILE"
@@ -111,7 +173,7 @@ docker image inspect "$IMAGE" >/dev/null
 mkdir -p "$BACKUP_DIR"
 umask 077
 backup_name="$BACKUP_DIR/pre-github-$SHA_SHORT-$(date +%Y%m%d%H%M%S).tar.gz"
-backup_runtime "$APP_DIR" "$backup_name"
+backup_consistent "$APP_DIR" "$backup_name"
 
 # Migrate old root-level state once. New images keep code immutable and write
 # only to this directory.
@@ -135,6 +197,10 @@ docker rm "$stager" >/dev/null
 umask 077
 printf 'MARANIUS_IMAGE_TAG=%s\n' "$SHA" > .deploy.env
 DEPLOY_STARTED=1
+if [[ -n "$PREVIOUS_IMAGE" ]]; then
+  docker stop -t 60 maranius >/dev/null
+fi
+can_restore_image "$RUNTIME_DIR" "$IMAGE"
 docker compose --env-file .deploy.env -f "$COMPOSE_FILE" up -d --no-build --force-recreate
 
 for _ in $(seq 1 18); do

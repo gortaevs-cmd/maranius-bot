@@ -40,6 +40,10 @@ def main() -> int:
         code = """
 import socket
 import unittest
+import tempfile
+from pathlib import Path
+from integrations import json_storage
+json_storage.TRANSACTION_ROOTS = (Path.cwd(), Path(tempfile.gettempdir()).resolve())
 def deny_network(*args, **kwargs):
     raise AssertionError('Network access is disabled in unit tests')
 socket.socket.connect = deny_network

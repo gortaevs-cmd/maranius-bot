@@ -9,8 +9,8 @@ from typing import Callable, Dict, Set
 
 from telegram.ext import Application, ContextTypes
 
-from integrations.json_storage import run_storage_io
-from integrations import admin_alerts, analytics, inbox as inbox_mod, user_registry
+from integrations.json_storage import atomic_json, run_storage_io
+from integrations import analytics, inbox as inbox_mod, user_registry, notification_outbox
 
 def _format_report_text(*, title: str, st: Dict[str, int], inbox_total: int) -> str:
     top = analytics.top_sections(7)
@@ -32,34 +32,38 @@ class ReportHandlers:
     seed_admin_ids: Set[int]
 
     async def _send_weekly_report(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        st = await run_storage_io(self.user_stats)
-        inbox_total, _ = await inbox_mod.stats()
-        await analytics.rollup_weekly()
-        text = await run_storage_io(_format_report_text, title="📊 Отчёт за неделю", st=st, inbox_total=inbox_total)
-        await admin_alerts.notify_seed_admins(context.bot, self.seed_admin_ids, text)
+        def commit():
+            st = self.user_stats()
+            inbox_total, _ = inbox_mod._stats_sync()
+            analytics._rollup_weekly_sync()
+            text = _format_report_text(title="📊 Отчёт за неделю", st=st, inbox_total=inbox_total)
+            notification_outbox._enqueue_sync(self.seed_admin_ids, text)
+        await run_storage_io(atomic_json, commit)
 
     async def _send_monthly_report(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        st = await run_storage_io(self.user_stats)
-        inbox_total, _ = await inbox_mod.stats()
-        now_msk = datetime.now(user_registry.MSK)
-        prev = (now_msk.replace(day=1) - timedelta(days=1))
-        entry = await analytics.rollup_monthly(prev.year, prev.month)
-        monthly = entry["stats_month"]
-        top = monthly["top_sections"]
-        top_lines = ", ".join(f"{html.escape(k)}: {v}" for k, v in top) if top else "—"
-        text = (
-            f"<b>📅 Итог месяца {prev.strftime('%m.%Y')}</b>\n"
-            "Активность за календарный месяц (МСК, по журналу):\n"
-            f"Событий: {monthly['events']} · пользователей: {monthly['unique_users']}\n"
-            f"Топ разделов месяца: {top_lines}\n\n"
-            "<b>Текущая сводка базы:</b>\n"
-            f"Пользователи (real): {st['real']}\n"
-            f"Активные 7/30д: {st['active_7']} / {st['active_30']}\n"
-            f"Спящие (&gt;30д): {st['sleeping']}\n"
-            f"VIP: {st['vip']} · без ПДн: {st['no_policy']} · рассылка: {st['marketing']}\n"
-            f"Inbox (90д): {inbox_total}"
-        )
-        await admin_alerts.notify_seed_admins(context.bot, self.seed_admin_ids, text)
+        def commit():
+            st = self.user_stats()
+            inbox_total, _ = inbox_mod._stats_sync()
+            now_msk = datetime.now(user_registry.MSK)
+            prev = (now_msk.replace(day=1) - timedelta(days=1))
+            entry = analytics._rollup_monthly_sync(prev.year, prev.month)
+            monthly = entry["stats_month"]
+            top = monthly["top_sections"]
+            top_lines = ", ".join(f"{html.escape(k)}: {v}" for k, v in top) if top else "—"
+            text = (
+                f"<b>📅 Итог месяца {prev.strftime('%m.%Y')}</b>\n"
+                "Активность за календарный месяц (МСК, по журналу):\n"
+                f"Событий: {monthly['events']} · пользователей: {monthly['unique_users']}\n"
+                f"Топ разделов месяца: {top_lines}\n\n"
+                "<b>Текущая сводка базы:</b>\n"
+                f"Пользователи (real): {st['real']}\n"
+                f"Активные 7/30д: {st['active_7']} / {st['active_30']}\n"
+                f"Спящие (&gt;30д): {st['sleeping']}\n"
+                f"VIP: {st['vip']} · без ПДн: {st['no_policy']} · рассылка: {st['marketing']}\n"
+                f"Inbox (90д): {inbox_total}"
+            )
+            notification_outbox._enqueue_sync(self.seed_admin_ids, text)
+        await run_storage_io(atomic_json, commit)
 
     def _schedule_reports(self, application: Application) -> None:
         if not application.job_queue:

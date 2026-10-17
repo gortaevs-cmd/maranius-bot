@@ -15,7 +15,8 @@
 | Тексты и клавиатуры | [`../ui.py`](../ui.py) | Константы `BTN_*`, сообщения, сборка клавиатур |
 | Платформа пользователей | [`../integrations/platform_db.py`](../integrations/platform_db.py) | `data/platform_users.json`, курсы |
 | Реестр пользователей | [`../integrations/user_registry.py`](../integrations/user_registry.py) | Синхронный API реестра; обработчики вызывают его в потоке под общим users lock |
-| Хранение JSON | [`../integrations/json_storage.py`](../integrations/json_storage.py) | Атомарная запись/восстановление, обязательные backup, отменобезопасный ввод-вывод |
+| Хранение JSON | [`../integrations/json_storage.py`](../integrations/json_storage.py) | Атомарная запись/восстановление, журнал нескольких JSON, обязательные backup и отменобезопасный ввод-вывод |
+| Бизнес-операции | [`../integrations/business_events.py`](../integrations/business_events.py) | Общие транзакции профиля, legacy, VIP-кодов и Inbox с очередью |
 | Очередь уведомлений | [`../integrations/notification_outbox.py`](../integrations/notification_outbox.py) | Сохранение уведомлений владельцам, отложенные повторы и отметка доставки Inbox |
 | Реферальная программа | [`../integrations/referrals.py`](../integrations/referrals.py) | Коды, qualification, ledger и заявки на награды |
 | События чатов | [`../events/`](../events/) | Подписки, реакции, `events.json` |

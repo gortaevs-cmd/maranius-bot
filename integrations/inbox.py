@@ -131,7 +131,11 @@ def _entry_notified(row: Dict[str, Any]) -> bool:
 
 async def stats() -> Tuple[int, int]:
     """total, unnotified."""
-    data = await load_store()
+    return await run_storage_io(_stats_sync)
+
+
+def _stats_sync() -> Tuple[int, int]:
+    data = _load_unlocked()
     entries = [e for e in data.get("entries", []) if isinstance(e, dict)]
     unnotified = sum(1 for e in entries if not _entry_notified(e))
     return len(entries), unnotified

@@ -116,3 +116,85 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("compose --env-file .rollback.env", marker.read_text())
         self.assertEqual((self.root / ".rollback.env").read_text(), "MARANIUS_IMAGE_TAG=previous\n")
+
+    def test_consistent_backup_pauses_and_resumes_running_container(self):
+        self.write_users()
+        calls = self.root / 'docker-calls'
+        result = subprocess.run([
+            'bash', '-c',
+            'source "$1"; calls=$4; docker() { printf "%s\\n" "$1" >> "$calls"; '
+            'if [[ "$1" == inspect ]]; then printf "true false\\n"; fi; }; '
+            'backup_consistent "$2" "$3"; test "$PAUSED_BY_DEPLOY" == 0',
+            'snapshot-test', str(DEPLOY_SCRIPT), str(self.app), str(self.archive), str(calls),
+        ], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls.read_text().splitlines(), ['inspect','pause','unpause'])
+        self.assertTrue(self.archive.exists())
+
+    def test_failed_consistent_backup_resumes_without_restart(self):
+        self.write_users()
+        calls = self.root / 'docker-calls'
+        result = subprocess.run([
+            'bash', '-c',
+            'source "$1"; calls=$4; docker() { printf "%s\\n" "$1" >> "$calls"; '
+            'if [[ "$1" == inspect ]]; then printf "true false\\n"; fi; }; '
+            'tar() { return 1; }; backup_consistent "$2" "$3"',
+            'snapshot-test', str(DEPLOY_SCRIPT), str(self.app), str(self.archive), str(calls),
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls.read_text().splitlines(), ['inspect','pause','unpause'])
+        self.assertFalse(self.archive.exists())
+
+    def test_already_paused_container_is_preserved(self):
+        self.write_users()
+        calls = self.root / 'docker-calls'
+        result = subprocess.run([
+            'bash', '-c',
+            'source "$1"; calls=$4; docker() { printf "%s\\n" "$1" >> "$calls"; '
+            'printf "true true\\n"; }; backup_consistent "$2" "$3"',
+            'snapshot-test', str(DEPLOY_SCRIPT), str(self.app), str(self.archive), str(calls),
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls.read_text().splitlines(), ['inspect'])
+
+    def test_pending_journal_rejects_old_image_but_allows_compatible_image(self):
+        runtime = self.write_users()
+        (runtime / 'storage_transaction.json').write_text('{"pending":true}')
+        for capability, expected_success in (('1', True), ('<no value>', False)):
+            with self.subTest(capability=capability):
+                result = subprocess.run([
+                    'bash', '-c',
+                    'source "$1"; expected_capability=$3; docker() { printf "%s\\n" "$expected_capability"; }; '
+                    'can_restore_image "$2" example:previous',
+                    'rollback-test', str(DEPLOY_SCRIPT), str(runtime), capability,
+                ], capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, expected_success, result.stderr)
+
+    def test_snapshot_must_include_existing_transaction_decision(self):
+        runtime = self.write_users()
+        (runtime / 'storage_transaction.json').write_text('{"pending":true}')
+        result = self.backup(prelude='tar() { if [[ "$1" == -czf ]]; then command tar -czf "$2" -C "$4" data .runtime/users.json .runtime/admins.json; else command tar "$@"; fi; }')
+        self.assert_failed_without_archive(result)
+
+    def test_rollback_stops_writer_before_rejecting_incompatible_pending_journal(self):
+        import shlex
+        runtime = self.write_users()
+        (runtime / 'storage_transaction.json').write_text('{"pending":true}')
+        helper = self.root / 'helper.sh'
+        helper.write_text(DEPLOY_SCRIPT.read_text().replace(
+            'readonly APP_DIR="/opt/apps/maranius"', 'readonly APP_DIR='+shlex.quote(str(self.app)),
+        ))
+        calls = self.root / 'docker-calls'
+        result = subprocess.run([
+            'bash', '-c',
+            'source "$1"; calls=$2; docker() { printf "%s\\n" "$*" >> "$calls"; '
+            'if [[ "$1" == inspect ]]; then printf "true\\n"; '
+            'elif [[ "$1" == image && "${3:-}" == --format ]]; then printf "<no value>\\n"; fi; }; '
+            'PREVIOUS_IMAGE="$IMAGE_REPOSITORY:old"; DEPLOY_STARTED=1; trap rollback ERR; false',
+            'rollback-test', str(helper), str(calls),
+        ], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        lines = calls.read_text().splitlines()
+        self.assertTrue(any(line.startswith('stop -t 60') for line in lines))
+        self.assertFalse(any(line.startswith('compose') for line in lines))
+        self.assertIn('rollback blocked', result.stderr)

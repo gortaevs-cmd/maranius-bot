@@ -32,3 +32,5 @@ data/angelic/.json-backups/
 data/vip/.json-backups/
 
 notification_outbox.json
+
+storage_transaction.json

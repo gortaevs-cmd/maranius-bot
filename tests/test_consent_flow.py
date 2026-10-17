@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import Mock, AsyncMock, MagicMock, patch
 
 import bot
 import ui
@@ -18,7 +18,7 @@ class AsyncLock:
 class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.consent_log_append = patch.object(
-            consent_handlers.consent_log, "append", new=AsyncMock()
+            consent_handlers.consent_log, "_append_sync", new=Mock()
         )
         self.mock_consent_log_append = self.consent_log_append.start()
         self.addCleanup(self.consent_log_append.stop)
@@ -156,7 +156,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
             bot.user_registry.PERSONAL_DATA_CONSENT_VERSION,
         )
         self.assertFalse(bot.user_registry.has_current_access(saved, 42))
-        log_kwargs = self.mock_consent_log_append.await_args.kwargs
+        log_kwargs = self.mock_consent_log_append.call_args.kwargs
         self.assertEqual(log_kwargs["document"], "personal-data-consent")
         self.assertEqual(log_kwargs["action"], ui.CB_POLICY_ACCEPT)
         self.assertNotIn("username", saved["42"])
@@ -197,7 +197,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(pending)
         self.assertTrue(bot.user_registry.has_current_access(users, 42))
-        log_kwargs = self.mock_consent_log_append.await_args.kwargs
+        log_kwargs = self.mock_consent_log_append.call_args.kwargs
         self.assertEqual(log_kwargs["document"], "user-agreement")
         self.assertEqual(log_kwargs["action"], ui.CB_USER_AGREEMENT_ACCEPT)
         query.message.reply_text.assert_awaited_once_with(
@@ -318,7 +318,7 @@ class StartConsentFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(pending)
         self.assertNotIn("marketing_opt_in", users["42"])
-        self.mock_consent_log_append.assert_not_awaited()
+        self.mock_consent_log_append.assert_not_called()
         query.message.reply_text.assert_awaited_once_with(
             ui.MSG_POLICY_GATE,
             parse_mode="HTML",

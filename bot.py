@@ -23,8 +23,8 @@ load_dotenv(_BOT_DIR / ".env", override=True)
 
 from integrations import (
     admin_alerts,
+    business_events,
     analytics,
-    consent_log,
     daily_practice,
     dice_content,
     ewasml_services,
@@ -37,7 +37,7 @@ from integrations import (
     vip_codes,
     vip_content,
 )
-from integrations.json_storage import JsonStorageError, load_json, pop_recovery_events, save_json, run_storage_io
+from integrations.json_storage import JsonStorageError, load_json, pop_recovery_events, save_json, run_storage_io, atomic_json
 from integrations.diagnostics import log_error
 from events.handlers import (
     make_subscribe_handler,
@@ -161,43 +161,14 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
     user = update.effective_user
     if not user:
         return False
-    uid = str(user.id)
     async with _users_lock:
-        users = await run_storage_io(_load_users)
-        if not force and not user_registry.has_current_access(users, user.id):
-            return False
-        # Проверяем первый визит в той же транзакции, что сохраняет профиль:
-        # параллельные сообщения не должны объявить пользователя новым дважды.
-        existing = users.get(uid)
-        is_new = not isinstance(existing, dict) or not existing.get("first_seen")
-        user_registry.merge_telegram_profile(
-            users,
-            user_id=user.id,
-            username=user.username,
-            first_name=user.first_name or "",
-            last_name=user.last_name or "",
-            language_code=user.language_code or "",
-            is_premium=getattr(user, "is_premium", False),
-            seed_admin_ids=SEED_ADMIN_IDS,
+        permitted, is_new = await run_storage_io(
+            business_events.profile_visit, user, load_users=_load_users,
+            save_users=_save_users, seed_admin_ids=SEED_ADMIN_IDS,
+            force=force, notify=bool(bot),
         )
-        if user.id in SEED_ADMIN_IDS:
-            users[uid]["vip"] = True
-        await run_storage_io(_save_users, users)
-
-    # Users from the separately stored legacy-inactive roster are activated
-    # only after the normal consent gate has allowed profile saving above.
-    reactivated = None
-    if bot:
-        reactivated = await legacy_contacts.claim_returning_inactive_user(user.id)
-        if reactivated:
-            await admin_alerts.notify_legacy_contact_return(
-                bot,
-                SEED_ADMIN_IDS,
-                user_id=user.id,
-                username=user.username,
-                first_name=user.first_name or "",
-                source=str(reactivated.get("source") or "legacy import"),
-            )
+    if not permitted:
+        return False
 
     name = (user.first_name or "") + (" " + (user.last_name or "") if user.last_name else "")
     if not name.strip():
@@ -220,14 +191,6 @@ async def ensure_user_saved(update: Update, *, bot=None, force: bool = False) ->
     if chat and chat.type in ("group", "supergroup"):
         _known_chats.add(chat.id)
 
-    if is_new and bot and not reactivated:
-        await admin_alerts.notify_new_subscriber(
-            bot,
-            SEED_ADMIN_IDS,
-            user_id=user.id,
-            username=user.username,
-            first_name=user.first_name or "",
-        )
     return is_new
 
 
@@ -634,6 +597,14 @@ async def _grant_vip_user(user_id: int, *, source: str = "code") -> None:
         await run_storage_io(_save_users, users)
 
 
+async def _activate_vip_code(raw_code, user):
+    async with _users_lock:
+        return await run_storage_io(
+            business_events.activate_vip_code, raw_code, user,
+            load_users=_load_users, save_users=_save_users, seed_admin_ids=SEED_ADMIN_IDS,
+        )
+
+
 async def show_vip_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """VIP: приветствие или запрос кода."""
     if not await _require_private_chat(update):
@@ -801,24 +772,10 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     user = update.effective_user
     if user:
-        entry = await ewasml_services.log_unknown_angelic(
-            key,
-            normalized,
-            user_id=user.id,
-            username=user.username,
+        await business_events.add_inbox_entry(
+            SEED_ADMIN_IDS, entry_type="unknown_angel", user_id=user.id,
+            username=user.username, text=key.strip(), meta={"normalized": normalized},
         )
-        if not entry.get("admin_notified_at"):
-            sent = await admin_alerts.notify_inbox_entry(
-                context.bot,
-                SEED_ADMIN_IDS,
-                user_id=user.id,
-                username=user.username,
-                entry_type="unknown_angel",
-                text=key.strip(),
-                entry_id=entry["id"],
-            )
-            if sent:
-                await inbox_mod.mark_notified(entry["id"])
     await message.reply_text(
         ui.MSG_ANGEL_NOT_FOUND.format(sign=key.strip()),
         parse_mode="HTML",
@@ -845,29 +802,29 @@ async def vip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def vip_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async def _grant(uid: int) -> None:
-        await _grant_vip_user(uid, source="admin_grant")
-
-    async def _audit(action: str, uid: int, invalid_code: str = "") -> None:
-        await _admin_handlers._audit_admin_action(
-            update,
-            action=action,
-            target_ids=[uid],
-            reason="Решение по алерту о неверном VIP-коде",
-            meta={"source": "vip_alert", "invalid_code": invalid_code or None},
-        )
-
-    async def _mark_code_used(code: str, uid: int) -> None:
-        await vip_codes.mark_code_used(code, user_id=uid)
+    async def commit_decision(action, uid, invalid_code=""):
+        def commit():
+            if action == "vip_grant_from_alert":
+                users = _load_users()
+                user_registry.grant_vip(users, uid, source="admin_grant")
+                _save_users(users)
+                if invalid_code:
+                    vip_codes._mark_code_used_sync(invalid_code, user_id=uid)
+            _admin_handlers._audit_admin_action_sync(
+                update, action=action, target_ids=[uid],
+                reason="Решение по алерту о неверном VIP-коде",
+                meta={"source": "vip_alert", "invalid_code": invalid_code or None},
+            )
+        async with _users_lock:
+            await run_storage_io(atomic_json, commit)
 
     await vip_handlers.vip_approve_callback(
         update,
         context,
         admin_guard=_admin_guard,
-        grant_vip=_grant,
+        grant_vip=_grant_vip_user,
         main_keyboard_for=_main_keyboard_for,
-        audit_action=_audit,
-        mark_code_used=_mark_code_used,
+        commit_decision=commit_decision,
     )
 
 
@@ -1205,26 +1162,10 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         user = query.from_user
         if user:
             async with _users_lock:
-                users = await run_storage_io(_load_users)
-                user_registry.set_marketing_opt_in(
-                    users, user.id, False, action=ui.CB_MARKETING_UNSUB
+                await run_storage_io(
+                    consent_handlers.update_marketing, _load_users, _save_users, user.id, False,
+                    source="unsub_button", action=ui.CB_MARKETING_UNSUB, require_access=False,
                 )
-                await run_storage_io(_save_users, users)
-            await consent_log.append(
-                user_id=user.id,
-                event="marketing_opt_out",
-                value=False,
-                purpose="telegram_marketing",
-                document="marketing-consent",
-                document_url=ui.URL_MARKETING_CONSENT,
-                policy_version=user_registry.MARKETING_CONSENT_VERSION,
-                action=ui.CB_MARKETING_UNSUB,
-                source="unsub_button",
-                meta={
-                    "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
-                    "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
-                },
-            )
             if query.message:
                 await query.message.reply_text(
                     ui.MSG_MARKETING_OFF,
@@ -1328,6 +1269,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         notify_success=lambda ctx, **kw: _notify_vip_code_redeemed(ctx, **kw),
         protect_kwargs=PROTECT_KWARGS,
         main_keyboard_for=_main_keyboard_for,
+        activate_code=_activate_vip_code,
     ):
         return
 
@@ -1340,24 +1282,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await ensure_user_saved(update, bot=context.bot)
 
-    entry = await inbox_mod.add_entry(
-        entry_type="unknown_command",
-        user_id=user.id,
-        username=user.username,
-        text=text,
+    await business_events.add_inbox_entry(
+        SEED_ADMIN_IDS, entry_type="unknown_command", user_id=user.id,
+        username=user.username, text=text,
     )
-    if not entry.get("admin_notified_at"):
-        sent = await admin_alerts.notify_inbox_entry(
-            context.bot,
-            SEED_ADMIN_IDS,
-            user_id=user.id,
-            username=user.username,
-            entry_type="unknown_command",
-            text=text,
-            entry_id=entry["id"],
-        )
-        if sent:
-            await inbox_mod.mark_notified(entry["id"])
 
     await update.message.reply_text(
         ui.UNKNOWN_COMMAND_HINT,
@@ -1422,28 +1350,44 @@ def _apply_pending_legacy_migration() -> Optional[Dict[str, Any]]:
     if any(key not in manifest for key in required_keys):
         raise ValueError("Legacy migration manifest is missing required fields")
 
-    users = _load_users()
-    inactive_store = legacy_contacts.load_inactive_store()
-    result = legacy_contacts.apply_legacy_migration(
-        users,
-        inactive_store,
-        active_user_ids=manifest["active_user_ids"],
-        vip_user_ids=manifest["vip_user_ids"],
-        inactive_user_ids=manifest["inactive_user_ids"],
-        source=str(manifest["source"]),
-    )
+    def commit():
+        previous = load_json(legacy_contacts.LAST_MIGRATION_FILE, None)
+        if isinstance(previous, dict) and previous.get("manifest") == manifest:
+            return None
+        users = _load_users()
+        inactive_store = legacy_contacts.load_inactive_store()
+        result = legacy_contacts.apply_legacy_migration(
+            users,
+            inactive_store,
+            active_user_ids=manifest["active_user_ids"],
+            vip_user_ids=manifest["vip_user_ids"],
+            inactive_user_ids=manifest["inactive_user_ids"],
+            source=str(manifest["source"]),
+        )
 
-    # Both files use atomic replacement and are backed up on every subsequent
-    # write.  Save the inactive queue first; a failed second write is safe to
-    # rerun because the migration merge is idempotent.
-    legacy_contacts.save_inactive_store(inactive_store)
-    _save_users(users)
-    completed = {
-        "manifest": manifest,
-        "result": result,
-        "applied_at": user_registry.now_iso(),
-    }
-    save_json(legacy_contacts.LAST_MIGRATION_FILE, completed, trailing_newline=True)
+        legacy_contacts.save_inactive_store(inactive_store)
+        _save_users(users)
+        completed = {
+            "manifest": manifest,
+            "result": result,
+            "applied_at": user_registry.now_iso(),
+        }
+        save_json(legacy_contacts.LAST_MIGRATION_FILE, completed, trailing_newline=True)
+
+        notification_outbox._enqueue_sync(
+            SEED_ADMIN_IDS,
+            (
+                "✅ <b>Миграция старой базы завершена</b>\n"
+                f"Активный пул: <b>{len(completed['manifest']['active_user_ids'])}</b>\n"
+                f"VIP: <b>{len(completed['manifest']['vip_user_ids'])}</b>\n"
+                f"Отдельный список: <b>{len(completed['manifest']['inactive_user_ids'])}</b>\n"
+                f"Новых активных записей: <b>{result['active_created']}</b>\n"
+                f"Выдано VIP: <b>{result['vip_granted']}</b>\n"
+                f"Добавлено в отдельный список: <b>{result['inactive_stored']}</b>"
+            ),
+        )
+        return completed
+    completed = atomic_json(commit)
     pending_path.unlink()
     return completed
 
@@ -1452,22 +1396,7 @@ async def _maranius_post_init(application: Application) -> None:
     """Сброс webhook (иначе polling конфликтует) и явный лог, какой бот подключён."""
     await run_storage_io(ensure_seed_admins)
     await run_storage_io(ensure_seed_vip)
-    migration = await run_storage_io(_apply_pending_legacy_migration)
-    if migration:
-        result = migration["result"]
-        await admin_alerts.notify_seed_admins(
-            application.bot,
-            SEED_ADMIN_IDS,
-            (
-                "✅ <b>Миграция старой базы завершена</b>\n"
-                f"Активный пул: <b>{len(migration['manifest']['active_user_ids'])}</b>\n"
-                f"VIP: <b>{len(migration['manifest']['vip_user_ids'])}</b>\n"
-                f"Отдельный список: <b>{len(migration['manifest']['inactive_user_ids'])}</b>\n"
-                f"Новых активных записей: <b>{result['active_created']}</b>\n"
-                f"Выдано VIP: <b>{result['vip_granted']}</b>\n"
-                f"Добавлено в отдельный список: <b>{result['inactive_stored']}</b>"
-            ),
-        )
+    await run_storage_io(_apply_pending_legacy_migration)
     migrated = await inbox_mod.migrate_legacy_unknown_csv()
     if migrated:
         print(f"Inbox: мигрировано из unknown_angelic.csv — {migrated} записей")

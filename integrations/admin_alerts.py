@@ -12,6 +12,7 @@ from typing import Deque, Dict, Optional, Set
 from telegram import Bot
 
 from integrations import notification_outbox
+from integrations.json_storage import run_storage_io
 
 _BASE = Path(__file__).resolve().parent.parent
 _RATE_FILE = _BASE / "data" / "admin_notify_rate.json"
@@ -68,6 +69,16 @@ async def notify_new_subscriber(
     username: Optional[str],
     first_name: str,
 ) -> None:
+    await run_storage_io(_notify_new_subscriber_sync, seed_admin_ids, user_id=user_id, username=username, first_name=first_name)
+
+
+def _notify_new_subscriber_sync(
+    seed_admin_ids: Set[int],
+    *,
+    user_id: int,
+    username: Optional[str],
+    first_name: str,
+) -> bool:
     un = f"@{html.escape(username)}" if username else "—"
     name = html.escape(first_name) if first_name else "—"
     text = (
@@ -76,7 +87,7 @@ async def notify_new_subscriber(
         f"Username: {un}\n"
         f"Имя: {name}"
     )
-    await notify_seed_admins(bot, seed_admin_ids, text)
+    return notification_outbox._enqueue_sync(seed_admin_ids, text)
 
 
 async def notify_vip_code_redeemed(
@@ -88,6 +99,17 @@ async def notify_vip_code_redeemed(
     first_name: str,
     code: str,
 ) -> None:
+    await run_storage_io(_notify_vip_code_redeemed_sync, seed_admin_ids, user_id=user_id, username=username, first_name=first_name, code=code)
+
+
+def _notify_vip_code_redeemed_sync(
+    seed_admin_ids: Set[int],
+    *,
+    user_id: int,
+    username: Optional[str],
+    first_name: str,
+    code: str,
+) -> bool:
     """Сообщить seed-админам об успешной активации VIP-кода."""
     un = f"@{html.escape(username)}" if username else "—"
     name = html.escape(first_name) if first_name else "—"
@@ -98,7 +120,7 @@ async def notify_vip_code_redeemed(
         f"Имя: {name}\n"
         f"Введённый VIP-код: <code>{html.escape(code.strip()[:120])}</code>"
     )
-    await notify_seed_admins(bot, seed_admin_ids, text)
+    return notification_outbox._enqueue_sync(seed_admin_ids, text)
 
 
 async def notify_legacy_contact_return(
@@ -110,6 +132,17 @@ async def notify_legacy_contact_return(
     first_name: str,
     source: str,
 ) -> None:
+    await run_storage_io(_notify_legacy_contact_return_sync, seed_admin_ids, user_id=user_id, username=username, first_name=first_name, source=source)
+
+
+def _notify_legacy_contact_return_sync(
+    seed_admin_ids: Set[int],
+    *,
+    user_id: int,
+    username: Optional[str],
+    first_name: str,
+    source: str,
+) -> bool:
     """Notify once when a legacy-inactive contact returns after consent."""
     un = f"@{html.escape(username)}" if username else "—"
     name = _user_profile_link(user_id, first_name)
@@ -121,7 +154,7 @@ async def notify_legacy_contact_return(
         f"Источник: {html.escape(source[:120])}\n\n"
         "Профиль активирован после принятия обязательных документов."
     )
-    await notify_seed_admins(bot, seed_admin_ids, text)
+    return notification_outbox._enqueue_sync(seed_admin_ids, text)
 
 
 async def notify_inbox_entry(
@@ -136,6 +169,13 @@ async def notify_inbox_entry(
 ) -> bool:
     if not await _can_notify_inbox(user_id):
         return False
+    return await run_storage_io(
+        _notify_inbox_entry_sync, seed_admin_ids, user_id=user_id, username=username,
+        entry_type=entry_type, text=text, entry_id=entry_id,
+    )
+
+
+def _notify_inbox_entry_sync(seed_admin_ids, *, user_id, username, entry_type, text, entry_id=None):
     un = f"@{html.escape(username)}" if username else "—"
     body = (
         "📥 <b>Inbox</b>\n"
@@ -143,7 +183,7 @@ async def notify_inbox_entry(
         f"User: <code>{user_id}</code> {un}\n"
         f"Текст: <code>{html.escape(text[:500])}</code>"
     )
-    return await notification_outbox.enqueue(
+    return notification_outbox._enqueue_sync(
         seed_admin_ids, body, key=f"inbox:{entry_id}" if entry_id else None, inbox_id=entry_id,
     )
 

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import Mock, AsyncMock, patch
 
 from telegram import CallbackQuery, Message, Update
 
@@ -34,10 +34,10 @@ class PendingActionTests(unittest.IsolatedAsyncioTestCase):
             (user_registry, "USERS_FILE", Path(temp.name) / "users.json"),
             (Message, "reply_text", self.reply),
             (CallbackQuery, "answer", AsyncMock()),
-            (bot.consent_handlers.consent_log, "append", AsyncMock()),
-            (bot.legacy_contacts, "claim_returning_inactive_user", AsyncMock(return_value=None)),
+            (bot.consent_handlers.consent_log, "_append_sync", Mock()),
+            (bot.legacy_contacts, "_claim_returning_inactive_user_sync", Mock(return_value=None)),
             (bot.platform_db, "get_or_create_user", AsyncMock()),
-            (bot.admin_alerts, "notify_new_subscriber", AsyncMock()),
+            (bot.admin_alerts, "_notify_new_subscriber_sync", Mock()),
         ):
             patcher = patch.object(target, name, value)
             patcher.start()

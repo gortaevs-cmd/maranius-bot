@@ -7,7 +7,7 @@ import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import bot
 from events import storage as event_storage
@@ -152,7 +152,10 @@ class RuntimeStorageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await consent_log.recent()), 1)
 
     async def test_cancelled_save_retains_users_lock_and_next_change(self):
-        user_registry.save_users({'42': {'id': 42}})
+        users = {'42': {'id': 42}}
+        user_registry.accept_policy(users, 42)
+        user_registry.accept_user_agreement(users, 42)
+        user_registry.save_users(users)
         entered, release = threading.Event(), threading.Event()
         original_save = bot._save_users
         calls = []
@@ -209,7 +212,10 @@ class RuntimeStorageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_code_redemption_finishes_vip_grant(self):
         await vip_codes.add_codes_bulk('test-code')
-        user_registry.save_users({'42': {'id': 42}})
+        users = {'42': {'id': 42}}
+        user_registry.accept_policy(users, 42)
+        user_registry.accept_user_agreement(users, 42)
+        user_registry.save_users(users)
         entered, release = threading.Event(), threading.Event()
         original_save = vip_codes._save_unlocked
 
@@ -267,24 +273,10 @@ class RuntimeStorageTests(unittest.IsolatedAsyncioTestCase):
             effective_user=SimpleNamespace(id=42, username='client', first_name='Client'),
             message=SimpleNamespace(reply_text=AsyncMock()),
         )
-        initial_checks = 0
-        counter_lock = threading.Lock()
-        both_started = threading.Barrier(2)
-
-        def is_vip(uid):
-            nonlocal initial_checks
-            with counter_lock:
-                initial_checks += 1
-                initial = initial_checks <= 2
-            if initial:
-                both_started.wait(2)
-                return False
-            return bot._user_is_vip(uid)
-
         async def activate(code):
             return await vip_handlers.try_vip_code(
                 update, SimpleNamespace(user_data={'awaiting_vip_code': True}), code,
-                is_vip=is_vip, grant_vip=bot._grant_vip_user,
+                is_vip=bot._user_is_vip, grant_vip=bot._grant_vip_user,
                 show_vip_home=AsyncMock(), notify_wrong=AsyncMock(), protect_kwargs={},
             )
         results = await asyncio.gather(activate('first-code'), activate('second-code'))
@@ -293,16 +285,19 @@ class RuntimeStorageTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(user_registry.load_users()['42']['vip'])
 
     async def test_write_failure_propagates_and_does_not_report_consent_success(self):
-        user_registry.save_users({'42': {'id': 42, 'marketing_opt_in': False}})
-        audit = AsyncMock()
-        with patch.object(profile.consent_log, 'append', audit), \
+        users = {'42': {'id': 42, 'marketing_opt_in': False}}
+        user_registry.accept_policy(users, 42)
+        user_registry.accept_user_agreement(users, 42)
+        user_registry.save_users(users)
+        audit = Mock()
+        with patch.object(consent_log, '_append_sync', audit), \
              patch.object(user_registry, 'save_json', side_effect=JsonStorageError('disk unavailable')):
             with self.assertRaises(JsonStorageError):
                 await profile.set_marketing_opt_in(
                     users_lock=self.users_lock, load_users=user_registry.load_users,
                     save_users=user_registry.save_users, user_id=42, value=True,
                 )
-        audit.assert_not_awaited()
+        audit.assert_not_called()
         self.assertFalse(user_registry.load_users()['42']['marketing_opt_in'])
         self.assertFalse(self.users_lock.locked())
 

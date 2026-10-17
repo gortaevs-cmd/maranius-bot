@@ -71,11 +71,11 @@ class CalendarMonthTests(unittest.IsolatedAsyncioTestCase):
               "vip": 5, "no_policy": 4, "marketing": 1}
         with patch.object(bot.report_handlers, "datetime") as clock, \
              patch.object(bot._reports, "user_stats", return_value=st), \
-             patch.object(bot.inbox_mod, "stats", new=AsyncMock(return_value=(4, 2))), \
-             patch.object(bot.admin_alerts, "notify_seed_admins", new=AsyncMock()) as notify:
+             patch.object(bot.inbox_mod, "_stats_sync", return_value=(4, 2)), \
+             patch.object(bot.notification_outbox, "_enqueue_sync", new=Mock()) as notify:
             clock.now.return_value = now
             await bot._reports._send_monthly_report(SimpleNamespace(bot="fake"))
-        text = notify.await_args.args[2]
+        text = notify.call_args.args[1]
         self.assertIn("02.2026", text)
         self.assertIn("Событий: 1 · пользователей: 1", text)
         self.assertIn("&lt;angel&gt;: 1", text)

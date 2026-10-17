@@ -25,3 +25,5 @@ __pycache__/
 data/angelic/unknown_angelic.csv
 
 notification_outbox.json
+
+storage_transaction.json

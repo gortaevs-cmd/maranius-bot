@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+LABEL org.maranius.storage-transactions="1"
+
 WORKDIR /app
 
 COPY requirements.txt ./

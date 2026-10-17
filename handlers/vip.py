@@ -106,9 +106,11 @@ async def notify_admin_wrong_code(
             log_error("vip_admin_notification_failed", exc)
 
 
-async def _redeem_and_grant(raw_code: str, user, is_vip, grant_vip):
+async def _redeem_and_grant(raw_code: str, user, is_vip, grant_vip, activate_code=None):
     """Keep code consumption and VIP grant together during task cancellation."""
     async with _CODE_ACTIVATION_LOCK:
+        if activate_code:
+            return await activate_code(raw_code, user)
         # Recheck after waiting: another code may already have granted access.
         if await run_storage_io(is_vip, user.id):
             return False, "already_vip"
@@ -137,6 +139,7 @@ async def try_vip_code(
     protect_kwargs: Dict[str, Any],
     main_keyboard_for: Optional[Callable[[int], Any]] = None,
     notify_success: Optional[Callable[..., Any]] = None,
+    activate_code: Optional[Callable[..., Any]] = None,
 ) -> bool:
     user = update.effective_user
     if not user or not update.message:
@@ -148,14 +151,14 @@ async def try_vip_code(
         return False
 
     ok, reason = await finish_storage_operation(
-        _redeem_and_grant(raw_code, user, is_vip, grant_vip)
+        _redeem_and_grant(raw_code, user, is_vip, grant_vip, activate_code)
     )
     if reason == "already_vip":
         context.user_data.pop("awaiting_vip_code", None)
         return False
     if ok:
         context.user_data.pop("awaiting_vip_code", None)
-        if notify_success:
+        if notify_success and not activate_code:
             await notify_success(
                 context,
                 user_id=user.id,
@@ -379,6 +382,7 @@ async def vip_approve_callback(
     main_keyboard_for: Optional[Callable[[int], Any]] = None,
     audit_action: Optional[Callable[..., Any]] = None,
     mark_code_used: Optional[Callable[[str, int], Any]] = None,
+    commit_decision: Optional[Callable[..., Any]] = None,
 ) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -392,12 +396,15 @@ async def vip_approve_callback(
             target_id = int(query.data[len(ui.CB_VIP_APPROVE_PREFIX) :])
         except ValueError:
             return
-        await grant_vip(target_id)
         invalid_code = _invalid_code_from_alert(getattr(query.message, "text", ""))
-        if invalid_code and mark_code_used:
-            await mark_code_used(invalid_code, target_id)
-        if audit_action:
-            await audit_action("vip_grant_from_alert", target_id, invalid_code)
+        if commit_decision:
+            await commit_decision("vip_grant_from_alert", target_id, invalid_code)
+        else:
+            await grant_vip(target_id)
+            if invalid_code and mark_code_used:
+                await mark_code_used(invalid_code, target_id)
+            if audit_action:
+                await audit_action("vip_grant_from_alert", target_id, invalid_code)
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -419,7 +426,9 @@ async def vip_approve_callback(
             target_id = int(query.data[len(ui.CB_VIP_REJECT_PREFIX) :])
         except ValueError:
             return
-        if audit_action:
+        if commit_decision:
+            await commit_decision("vip_reject_from_alert", target_id)
+        elif audit_action:
             await audit_action("vip_reject_from_alert", target_id)
         try:
             await context.bot.send_message(

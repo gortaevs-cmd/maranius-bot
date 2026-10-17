@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from integrations.json_storage import run_storage_io
-from integrations import consent_log, user_registry
+from handlers.consent import update_marketing
+from integrations import user_registry
 import ui
 
 
@@ -119,21 +120,8 @@ async def set_marketing_opt_in(
     action: str = "",
 ) -> None:
     async with users_lock:
-        users = await run_storage_io(load_users)
-        user_registry.set_marketing_opt_in(users, user_id, value, action=action)
-        await run_storage_io(save_users, users)
-    await consent_log.append(
-        user_id=user_id,
-        event="marketing_opt_in" if value else "marketing_opt_out",
-        value=value,
-        purpose="telegram_marketing",
-        document="marketing-consent",
-        document_url=ui.URL_MARKETING_CONSENT,
-        policy_version=user_registry.MARKETING_CONSENT_VERSION,
-        action=action,
-        source=source,
-        meta={
-            "privacy_policy_version": user_registry.PRIVACY_POLICY_VERSION,
-            "user_agreement_version": user_registry.USER_AGREEMENT_VERSION,
-        },
-    )
+        _, allowed = await run_storage_io(
+            update_marketing, load_users, save_users, user_id, value, source=source, action=action,
+        )
+    if not allowed:
+        raise PermissionError("Current access is required for marketing settings")
