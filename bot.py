@@ -308,6 +308,19 @@ async def _require_access(
     )
 
 
+async def _require_private_chat(update: Update) -> bool:
+    """Закрытые материалы и административные данные доступны только в личке."""
+    chat = update.effective_chat
+    if chat and chat.type == "private":
+        return True
+    query = update.callback_query
+    if query:
+        await query.answer(ui.MSG_PRIVATE_CHAT_ONLY, show_alert=True)
+    elif update.effective_message:
+        await update.effective_message.reply_text(ui.MSG_PRIVATE_CHAT_ONLY)
+    return False
+
+
 def is_admin(user_id: int) -> bool:
     """Проверить, является ли пользователь администратором (файл + seed)."""
     if user_id in SEED_ADMIN_IDS:
@@ -677,6 +690,8 @@ async def _open_god_panel(update: Update) -> None:
     if user.id not in SEED_ADMIN_IDS:
         await message.reply_text(ui.ADMIN_DENIED)
         return
+    if not await _require_private_chat(update):
+        return
     await add_admin(user.id)
     await message.reply_text(
         ui.ADMIN_STUB,
@@ -695,6 +710,8 @@ async def god_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or user.id not in SEED_ADMIN_IDS:
         await _open_god_panel(update)
+        return
+    if not await _require_private_chat(update):
         return
     await ensure_user_saved(update, force=True)
     await _open_god_panel(update)
@@ -947,6 +964,8 @@ async def _grant_vip_user(user_id: int, *, source: str = "code") -> None:
 
 async def show_vip_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """VIP: приветствие или запрос кода."""
+    if not await _require_private_chat(update):
+        return
     if not await _require_access(update, context, "vip"):
         return
     user = update.effective_user
@@ -1455,6 +1474,8 @@ async def _admin_guard(update: Update) -> bool:
     if not user and update.callback_query:
         user = update.callback_query.from_user
     if user and user.id in SEED_ADMIN_IDS:
+        if not await _require_private_chat(update):
+            return False
         users = _load_users()
         if user_registry.has_current_access(users, user.id):
             return True
@@ -2191,6 +2212,14 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def vip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    if not await _require_private_chat(update):
+        return
+    if not await _require_access(update, context, "vip"):
+        await query.answer()
+        return
     await vip_handlers.vip_menu_callback(
         update,
         context,
@@ -2481,16 +2510,23 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
     mc = update.my_chat_member
     if not mc or not mc.chat or mc.chat.type != "private":
         return
-    user = mc.new_chat_member.user
-    if not user or user.is_bot:
-        return
+    # У MY_CHAT_MEMBER new_chat_member.user — сам бот. В личном чате
+    # владельца профиля определяет chat.id, а не участник с новым статусом.
+    user_id = mc.chat.id
     status = mc.new_chat_member.status
+    if status not in ("kicked", "banned", "member"):
+        return
+    if mc.old_chat_member.status == status:
+        return
     async with _users_lock:
         users = _load_users()
+        # Не создаём профиль по служебному событию до принятия документов.
+        if str(user_id) not in users:
+            return
         if status in ("kicked", "banned"):
-            user_registry.set_bot_status(users, user.id, "blocked")
+            user_registry.set_bot_status(users, user_id, "blocked")
         elif status == "member":
-            user_registry.set_bot_status(users, user.id, "active")
+            user_registry.set_bot_status(users, user_id, "active")
         _save_users(users)
 
 
@@ -2656,6 +2692,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     text = (update.message.text or "").strip()
     if _is_seed_admin(user.id):
+        if not await _require_private_chat(update):
+            return
         await add_admin(user.id)
 
     if text == ui.BTN_TODAY:
@@ -2734,6 +2772,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await update.message.reply_text(ui.MSG_ACCESS_RESTRICTED, parse_mode="HTML")
                 return
 
+    if context.user_data.get("awaiting_vip_code") and not await _require_private_chat(update):
+        return
     if await vip_handlers.try_vip_code(
         update,
         context,
@@ -2897,7 +2937,7 @@ async def _maranius_post_init(application: Application) -> None:
     migrated = await inbox_mod.migrate_legacy_unknown_csv()
     if migrated:
         print(f"Inbox: мигрировано из unknown_angelic.csv — {migrated} записей")
-    await application.bot.delete_webhook(drop_pending_updates=True)
+    await application.bot.delete_webhook(drop_pending_updates=False)
     cmd_count = await sync_bot_commands(application.bot)
     me = await application.bot.get_me()
     un = f"@{me.username}" if me.username else "(без username)"
@@ -3015,7 +3055,7 @@ def main() -> None:
     print("Бот запущен (long polling)...")
     application.run_polling(
         allowed_updates=["message", "callback_query", "message_reaction", "my_chat_member"],
-        drop_pending_updates=True,
+        drop_pending_updates=False,
     )
 
 

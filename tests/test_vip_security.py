@@ -173,6 +173,7 @@ class AdminGuardTests(unittest.IsolatedAsyncioTestCase):
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=admin_id),
             effective_message=SimpleNamespace(reply_text=AsyncMock()),
+            effective_chat=SimpleNamespace(type="private"),
             callback_query=None,
         )
         users = {

@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pip-audit
       - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+        run: python -B scripts/run_isolated_tests.py
       - name: Compile Python sources
         run: python -m compileall -q bot.py ui.py handlers integrations events scripts
       - name: Dependency audit

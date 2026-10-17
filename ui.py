@@ -304,6 +304,7 @@ MSG_POLICY_ACCEPTED = (
 )
 MSG_POLICY_CONTINUE = "Продолжай с нужного раздела в меню."
 MSG_ACCESS_RESTRICTED = "Доступ ограничен."
+MSG_PRIVATE_CHAT_ONLY = "Этот раздел доступен только в личном чате с @MaraniusBOT."
 
 MSG_MARKETING_OFFER = (
     "<b>Новости и анонсы Maranius в Telegram</b>\n\n"

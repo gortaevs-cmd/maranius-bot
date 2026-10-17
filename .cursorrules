@@ -15,7 +15,7 @@ Telegram-бот Maranius: ежедневные практики, ангельс�
 
 ## Проверка и деплой
 
-- Тесты: `.venv/bin/python -m unittest discover -s tests -v`.
+- Тесты: `.venv/bin/python -B scripts/run_isolated_tests.py` (временная копия, без `.env`, рабочих JSON и сетевых запросов).
 - Prod-only: локально только unit-тесты, не `bot.py` (Conflict с TimeWeb).
 - Боевой деплой: только GitHub Actions (verified image → restricted SSH) на TimeWeb; ручной `scripts/deploy_hip_prod.sh` отключён.
 

@@ -2,6 +2,7 @@
 
 .env
 .venv/
+.runtime/
 users.json
 admins.json
 admin_audit.json

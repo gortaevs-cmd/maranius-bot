@@ -218,7 +218,6 @@ async def _vip_edit_or_reply(message, text: str, reply_markup, protect_kwargs) -
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=reply_markup,
-            **protect_kwargs,
         )
     except Exception:
         await message.reply_text(
