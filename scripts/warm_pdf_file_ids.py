@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from telegram import Bot, InputFile
 
 from integrations import vip_content
+from integrations.diagnostics import log_error
 
 load_dotenv(ROOT / ".env", override=True)
 
@@ -56,10 +57,10 @@ def _upload_via_curl(
         out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
         data = json.loads(out)
     except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
-        print(f"  curl fallback failed: {exc!r}")
+        log_error("pdf_curl_upload_failed", exc)
         return None
     if not data.get("ok"):
-        print(f"  curl fallback API error: {data}")
+        print("  curl fallback API error")
         return None
     doc = (data.get("result") or {}).get("document") or {}
     return doc.get("file_id")
@@ -108,7 +109,8 @@ async def main() -> int:
                 )
             fid = msg.document.file_id if msg.document else None
         except Exception as exc:
-            print(f"  {variant}: PTB upload failed ({exc!r}), curl fallback…")
+            log_error("pdf_telegram_upload_failed", exc)
+            print(f"  {variant}: using curl fallback")
             fid = _upload_via_curl(token, SEED_ADMIN_ID, path, label, proxy)
         if not fid:
             print(f"  {variant}: FATAL нет file_id в ответе")

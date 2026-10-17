@@ -11,6 +11,9 @@ import httpx
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from integrations.diagnostics import log_error
+
 load_dotenv(ROOT / ".env", override=True)
 
 
@@ -48,11 +51,11 @@ def main() -> int:
         response.raise_for_status()
         data = response.json()
     except Exception as exc:
-        print(f"SMOKE FAIL: getMe — {exc!r}", file=sys.stderr)
+        log_error("smoke_get_me_failed", exc)
         return 1
 
     if not data.get("ok"):
-        print(f"SMOKE FAIL: getMe ответ — {data!r}", file=sys.stderr)
+        print("SMOKE FAIL: Telegram rejected getMe", file=sys.stderr)
         return 1
 
     user = data.get("result") or {}

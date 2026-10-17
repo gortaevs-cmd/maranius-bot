@@ -45,6 +45,7 @@ from integrations import (
     vip_content,
 )
 from integrations.json_storage import JsonStorageError, load_json, pop_recovery_events, save_json
+from integrations.diagnostics import log_error
 from events.handlers import (
     make_subscribe_handler,
     make_unsubscribe_handler,
@@ -1394,7 +1395,7 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=main_kb,
         )
     except Exception as e:
-        print(f"Ошибка погода по геолокации: {e!r}")
+        log_error("weather_location_failed", e)
         await update.message.reply_text(
             ui.MSG_WEATHER_GEO_FAIL,
             reply_markup=main_kb,
@@ -1647,7 +1648,7 @@ async def _admin_exec_user_cmd(
                 reply_markup=_main_keyboard_for(uid),
             )
         except Exception as exc:
-            print(f"VIP notify user {uid}: {exc!r}")
+            log_error("vip_user_notification_failed", exc)
 
     if message:
         await message.reply_text(
@@ -2832,9 +2833,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Сообщить пользователю и админу о любой необработанной ошибке."""
-    print(f"Handler error: {context.error!r}")
-    if update:
-        print(f"  update={update!r}")
+    log_error("handler_failed", context.error, update_id=getattr(update, "update_id", None))
     message = getattr(update, "effective_message", None)
     if message:
         try:
@@ -2842,16 +2841,16 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             kb = _main_keyboard_for(user.id) if user else ui.get_main_keyboard()
             await message.reply_text(ui.MSG_TECHNICAL_ERROR, reply_markup=kb)
         except Exception as exc:
-            print(f"Error reply failed: {exc!r}")
+            log_error("error_reply_failed", exc)
 
     error_kind = "JSON-ошибка" if isinstance(context.error, JsonStorageError) else "Неожиданная ошибка"
-    details = html.escape(str(context.error)[:3000])
+    details = html.escape(type(context.error).__name__)
     alert = f"⚠️ {error_kind} MaraniusBOT:\n<code>{details}</code>"
     for admin_id in SEED_ADMIN_IDS:
         try:
             await context.bot.send_message(admin_id, alert, parse_mode="HTML")
         except Exception as exc:
-            print(f"Error notify {admin_id}: {exc!r}")
+            log_error("error_notification_failed", exc)
 
 
 async def _notify_storage_recoveries(context) -> None:
@@ -2866,7 +2865,7 @@ async def _notify_storage_recoveries(context) -> None:
             try:
                 await context.bot.send_message(admin_id, text, parse_mode="HTML")
             except Exception as exc:
-                print(f"Storage recovery notify {admin_id}: {exc!r}")
+                log_error("storage_recovery_notification_failed", exc)
 
 
 def _apply_pending_legacy_migration() -> Optional[Dict[str, Any]]:
@@ -3007,7 +3006,7 @@ def main() -> None:
         .post_stop(_stop_technical_heartbeat)
     )
     if TELEGRAM_PROXY_URL:
-        print(f"Telegram proxy: {TELEGRAM_PROXY_URL}")
+        print("Telegram proxy enabled")
         builder = builder.proxy(TELEGRAM_PROXY_URL).get_updates_proxy(TELEGRAM_PROXY_URL)
     application = builder.build()
 

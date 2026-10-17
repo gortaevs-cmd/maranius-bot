@@ -25,7 +25,8 @@ class ErrorHandlingTests(unittest.TestCase):
             )
             self.assertEqual(context.bot.send_message.await_count, len(bot.SEED_ADMIN_IDS))
             alert = context.bot.send_message.await_args.args[1]
-            self.assertIn("service &lt;down&gt;", alert)
+            self.assertIn("RuntimeError", alert)
+            self.assertNotIn("service &lt;down&gt;", alert)
             self.assertNotIn("service <down>", alert)
 
         asyncio.run(scenario())

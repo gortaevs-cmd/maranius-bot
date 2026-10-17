@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Set
 
 from telegram import Bot
+from integrations.diagnostics import log_error
 
 
 def _user_link(user: Dict[str, Any]) -> str:
@@ -104,5 +105,5 @@ async def notify_admins(
                 text=text,
                 parse_mode="HTML",
             )
-        except Exception:
-            pass  # Игнорируем ошибки отправки (заблокировал бота и т.п.)
+        except Exception as exc:
+            log_error("group_event_notification_failed", exc)

@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 
 from integrations import vip_codes, vip_content
 from integrations.json_storage import load_json, save_json
+from integrations.diagnostics import log_error
 import ui
 
 ADMIN_NOTIFY_COOLDOWN_SEC = 300
@@ -100,7 +101,7 @@ async def notify_admin_wrong_code(
                 reply_markup=kb,
             )
         except Exception as exc:
-            print(f"VIP notify admin {admin_id}: {exc!r}")
+            log_error("vip_admin_notification_failed", exc)
 
 
 async def try_vip_code(
@@ -333,7 +334,7 @@ async def vip_menu_callback(
                     **protect_kwargs,
                 )
         except Exception as exc:
-            print(f"VIP PDF upload {variant}: {exc!r}")
+            log_error("vip_pdf_upload_failed", exc)
             await msg.reply_text(
                 "Не удалось отправить PDF, попробуй позже.",
                 parse_mode="HTML",
@@ -389,7 +390,7 @@ async def vip_approve_callback(
                 reply_markup=_reply_keyboard(target_id, main_keyboard_for),
             )
         except Exception as exc:
-            print(f"VIP approve notify {target_id}: {exc!r}")
+            log_error("vip_approval_notification_failed", exc)
         if query.message:
             await query.message.reply_text(
                 f"✅ VIP выдан пользователю <code>{target_id}</code>",
@@ -412,7 +413,7 @@ async def vip_approve_callback(
                 reply_markup=_reply_keyboard(target_id, main_keyboard_for),
             )
         except Exception as exc:
-            print(f"VIP reject notify {target_id}: {exc!r}")
+            log_error("vip_rejection_notification_failed", exc)
         if query.message:
             await query.message.reply_text(
                 f"❌ Запрос отклонён для <code>{target_id}</code>",
