@@ -446,6 +446,7 @@ MSG_WEATHER_LOCATION_EXPIRED = (
 MSG_WEATHER_CACHE_HINT = "\n\n<i>Сменить место: отправь «новое место».</i>"
 MSG_WEATHER_FETCH_FAIL = "Не удалось получить погоду, попробуй позже."
 MSG_WEATHER_GEO_FAIL = "Не удалось получить погоду по геолокации, попробуй позже."
+MSG_WEATHER_LOCATION_CHANGED = "Местоположение изменилось. Открой «Погода» ещё раз."
 
 # --- Режим бога (скрытый /god) ---
 GOD_TEXT_TRIGGER = "god"

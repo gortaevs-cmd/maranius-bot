@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import io
 import json
 import os
@@ -12,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from integrations.csv_export import SafeCsvWriter
 from integrations.json_storage import load_json, save_json
 
 _BASE = Path(__file__).resolve().parent.parent
@@ -110,7 +110,7 @@ async def export_csv_bytes(path: Optional[Path] = None) -> bytes:
         rows = [entry for entry in rows if isinstance(entry, dict)]
 
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
+    writer = SafeCsvWriter(buf)
     writer.writerow(
         [
             "id",

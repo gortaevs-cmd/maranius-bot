@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pytz
 
+from integrations.csv_export import SafeCsvWriter
 from integrations.json_storage import load_json, save_json
 
 _BASE = Path(__file__).resolve().parent.parent
@@ -38,9 +39,12 @@ _PRESERVE_KEYS = (
     "last_location",
     "timezone",
     "last_weather_text",
+    "last_weather_location",
+    "last_weather_fetched_at",
     "daily_practice",
     "vip",
     "vip_granted_at",
+    "vip_revoked_at",
     "vip_source",
     "policy_accepted_at",
     "policy_version",
@@ -393,12 +397,11 @@ def export_users_csv(
     *,
     segment: Optional[str] = None,
 ) -> bytes:
-    import csv
     import io
 
     pred = segment_filter(segment) if segment else lambda _r: True
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
+    writer = SafeCsvWriter(buf)
     writer.writerow(
         [
             "id",

@@ -282,16 +282,21 @@ def ensure_seed_vip() -> None:
         _save_users(users)
 
 
-async def _save_user_location(uid: str, lat: float, lon: float) -> None:
+async def _save_user_location(uid: str, lat: float, lon: float) -> Dict[str, Any]:
     now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     timezone_str = _get_timezone_by_coords(lat, lon)
     async with _users_lock:
         users = _load_users()
         row = users.setdefault(uid, {})
         row["last_location"] = {"lat": lat, "lon": lon, "updated_at": now_str}
+        for key in ("last_weather_text", "last_weather_location", "last_weather_fetched_at"):
+            row.pop(key, None)
         if timezone_str:
             row["timezone"] = timezone_str
+        else:
+            row.pop("timezone", None)
         _save_users(users)
+        return dict(row)
 
 
 async def _require_access(
@@ -764,15 +769,31 @@ def _location_is_fresh(user_data: Dict[str, Any]) -> bool:
     if not updated_at:
         return False
     hours = _location_age_hours(updated_at)
-    return hours is not None and hours <= WEATHER_LOCATION_TTL_HOURS
+    return hours is not None and 0 <= hours <= WEATHER_LOCATION_TTL_HOURS
 
 
-async def _save_weather_cache(uid: str, text: str) -> None:
+def _weather_cache_is_fresh(user_data: Dict[str, Any]) -> bool:
+    location = user_data.get("last_location")
+    if not location or user_data.get("last_weather_location") != location:
+        return False
+    hours = _location_age_hours(user_data.get("last_weather_fetched_at", ""))
+    return bool(user_data.get("last_weather_text")) and (
+        hours is not None and 0 <= hours <= WEATHER_LOCATION_TTL_HOURS
+    )
+
+
+async def _save_weather_cache(uid: str, text: str, *, location: Dict[str, Any]) -> bool:
+    """Не сохранять результат запроса, если за это время изменилось место."""
     async with _users_lock:
         users = _load_users()
-        if uid in users:
-            users[uid]["last_weather_text"] = text
-            _save_users(users)
+        row = users.get(uid)
+        if not row or row.get("last_location") != location:
+            return False
+        row["last_weather_text"] = text
+        row["last_weather_location"] = dict(location)
+        row["last_weather_fetched_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        _save_users(users)
+        return True
 
 
 
@@ -1304,7 +1325,9 @@ async def _weather_fetch_and_send(update: Update, user_data: Dict[str, Any]) -> 
     if not text:
         await message.reply_text(ui.MSG_WEATHER_FETCH_FAIL, reply_markup=main_kb)
         return
-    await _save_weather_cache(uid, text)
+    if not await _save_weather_cache(uid, text, location=loc):
+        await message.reply_text(ui.MSG_WEATHER_LOCATION_CHANGED, reply_markup=main_kb)
+        return
     await message.reply_text(text, parse_mode="HTML", reply_markup=main_kb)
 
 
@@ -1331,7 +1354,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     cached = user_data.get("last_weather_text")
-    if cached:
+    if _weather_cache_is_fresh(user_data):
         hint = ui.MSG_WEATHER_CACHE_HINT.strip()
         display = cached if hint in cached else cached + ui.MSG_WEATHER_CACHE_HINT
         await message.reply_text(display, parse_mode="HTML", reply_markup=main_kb)
@@ -1361,14 +1384,12 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     uid = str(user.id)
-    user_data = _load_users().get(uid, {})
     main_kb = _main_keyboard_for(user.id)
 
     try:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
-        await _save_user_location(uid, lat, lon)
-        user_data = _load_users().get(uid, {})
+        user_data = await _save_user_location(uid, lat, lon)
         place_name = await _get_city_from_coords(lat, lon)
         if not place_name or place_name == "Локация":
             place_name = f"({lat:.4f}, {lon:.4f})"
@@ -1388,7 +1409,11 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        await _save_weather_cache(uid, text)
+        if not await _save_weather_cache(uid, text, location=user_data["last_location"]):
+            await update.message.reply_text(
+                ui.MSG_WEATHER_LOCATION_CHANGED, reply_markup=main_kb
+            )
+            return
         await update.message.reply_text(
             text,
             parse_mode="HTML",
@@ -1405,7 +1430,8 @@ async def weather_by_location(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str) -> None:
     """Ответ расшифровкой ангельского знака из локальных CSV."""
-    if not update.message:
+    message = update.effective_message
+    if not message:
         return
     context.user_data["pending_angel_key"] = key
     if not await _require_access(update, context, "angel"):
@@ -1416,7 +1442,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if meaning:
         display = normalized if normalized != key.strip() else key.strip()
         text = ui.format_angelic_sign(display, meaning)
-        await update.message.reply_text(
+        await message.reply_text(
             text,
             parse_mode="HTML",
             disable_web_page_preview=True,
@@ -1446,7 +1472,7 @@ async def reply_angelic_sign(update: Update, context: ContextTypes.DEFAULT_TYPE,
             )
             if sent:
                 await inbox_mod.mark_notified(entry["id"])
-    await update.message.reply_text(
+    await message.reply_text(
         ui.MSG_ANGEL_NOT_FOUND.format(sign=key.strip()),
         parse_mode="HTML",
         reply_markup=_main_keyboard_for(user.id) if user else ui.get_main_keyboard(),
@@ -2558,11 +2584,21 @@ async def _send_monthly_report(context: ContextTypes.DEFAULT_TYPE) -> None:
     inbox_total, _ = await inbox_mod.stats()
     now_msk = datetime.now(user_registry.MSK)
     prev = (now_msk.replace(day=1) - timedelta(days=1))
-    await analytics.rollup_monthly(prev.year, prev.month)
-    text = _format_report_text(
-        title=f"📅 Итог месяца {prev.strftime('%m.%Y')}",
-        st=st,
-        inbox_total=inbox_total,
+    entry = await analytics.rollup_monthly(prev.year, prev.month)
+    monthly = entry["stats_month"]
+    top = monthly["top_sections"]
+    top_lines = ", ".join(f"{html.escape(k)}: {v}" for k, v in top) if top else "—"
+    text = (
+        f"<b>📅 Итог месяца {prev.strftime('%m.%Y')}</b>\n"
+        "Активность за календарный месяц (МСК, по журналу):\n"
+        f"Событий: {monthly['events']} · пользователей: {monthly['unique_users']}\n"
+        f"Топ разделов месяца: {top_lines}\n\n"
+        "<b>Текущая сводка базы:</b>\n"
+        f"Пользователи (real): {st['real']}\n"
+        f"Активные 7/30д: {st['active_7']} / {st['active_30']}\n"
+        f"Спящие (&gt;30д): {st['sleeping']}\n"
+        f"VIP: {st['vip']} · без ПДн: {st['no_policy']} · рассылка: {st['marketing']}\n"
+        f"Inbox (90д): {inbox_total}"
     )
     await admin_alerts.notify_seed_admins(context.bot, SEED_ADMIN_IDS, text)
 
@@ -2609,6 +2645,14 @@ async def _continue_pending_action(
         await show_store(update, context)
     elif pending == "more":
         await show_more(update, context)
+    elif pending == "contact":
+        await show_contact(update, context)
+    elif pending == "services":
+        await show_services(update, context)
+    elif pending == "learning":
+        await show_learning(update, context)
+    elif pending == "info":
+        await show_info(update, context)
     elif pending == "marketing_subscribe":
         user = update.effective_user
         if user and update.effective_message:

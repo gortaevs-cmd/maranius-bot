@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from integrations.csv_export import SafeCsvWriter
 from integrations.json_storage import load_json, save_json
 
 _LOCK = asyncio.Lock()
@@ -133,7 +134,7 @@ async def export_csv_bytes() -> Tuple[bytes, str]:
     import io
 
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
+    writer = SafeCsvWriter(buf)
     writer.writerow(
         [
             "id",

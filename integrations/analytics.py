@@ -63,12 +63,19 @@ async def log_section(user_id: int, section: str) -> None:
         _save_json(EVENTS_FILE, store)
 
 
-def _events_in_period(days: int) -> List[Dict[str, Any]]:
+def month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
+    """Границы календарного месяца МСК в UTC: [начало, следующий месяц)."""
+    start = MSK.localize(datetime(year, month, 1))
+    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+    end = MSK.localize(datetime(next_year, next_month, 1))
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def _events_between(start: datetime, end: datetime) -> List[Dict[str, Any]]:
     store = _load_json(EVENTS_FILE, {"events": []})
     events = store.get("events", [])
     if not isinstance(events, list):
         return []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     out: List[Dict[str, Any]] = []
     for ev in events:
         if not isinstance(ev, dict):
@@ -79,9 +86,14 @@ def _events_in_period(days: int) -> List[Dict[str, Any]]:
                 dt = dt.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             continue
-        if dt >= cutoff:
+        if start <= dt < end:
             out.append(ev)
     return out
+
+
+def _events_in_period(days: int) -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    return _events_between(now - timedelta(days=days), now)
 
 
 def top_sections(days: int = 7, limit: int = 5) -> List[tuple[str, int]]:
@@ -94,7 +106,14 @@ def top_sections(days: int = 7, limit: int = 5) -> List[tuple[str, int]]:
 
 
 def period_stats(days: int) -> Dict[str, Any]:
-    events = _events_in_period(days)
+    return _summarize_events(_events_in_period(days))
+
+
+def monthly_stats(year: int, month: int) -> Dict[str, Any]:
+    return _summarize_events(_events_between(*month_bounds(year, month)))
+
+
+def _summarize_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     sections: Counter[str] = Counter()
     users: set[int] = set()
     for ev in events:
@@ -129,14 +148,17 @@ async def rollup_weekly() -> None:
         _save_json(AGGREGATES_FILE, ag)
 
 
-async def rollup_monthly(year: int, month: int) -> None:
+async def rollup_monthly(year: int, month: int) -> Dict[str, Any]:
+    start, end = month_bounds(year, month)
     async with _LOCK:
         ag = _load_json(AGGREGATES_FILE, {"weekly": [], "monthly": []})
         key = f"{year:04d}-{month:02d}"
         entry = {
             "period": key,
             "computed_at": _now_iso(),
-            "stats_30d": period_stats(30),
+            "start_inclusive": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_exclusive": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "stats_month": monthly_stats(year, month),
         }
         monthly: List[Dict[str, Any]] = ag.get("monthly", [])
         if not isinstance(monthly, list):
@@ -145,3 +167,4 @@ async def rollup_monthly(year: int, month: int) -> None:
         monthly.append(entry)
         ag["monthly"] = monthly[-24:]
         _save_json(AGGREGATES_FILE, ag)
+        return entry

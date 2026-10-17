@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import io
 import json
 import uuid
@@ -11,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from integrations.csv_export import SafeCsvWriter
 from integrations.json_storage import load_json, save_json
 
 RETENTION_DAYS = 365
@@ -102,7 +102,7 @@ async def export_csv_bytes(path: Path) -> bytes:
         rows = [entry for entry in rows if isinstance(entry, dict)]
 
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
+    writer = SafeCsvWriter(buf)
     writer.writerow(["id", "created_at", "actor_id", "action", "target_ids", "reason", "meta_json"])
     for row in rows:
         writer.writerow(

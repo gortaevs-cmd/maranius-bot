@@ -28,6 +28,9 @@
 | `first_seen`, `last_seen` | ISO UTC строка | реализовано |
 | `last_location` | `{ lat, lon, updated_at }` | реализовано (при геосообщении) |
 | `timezone` | str (IANA), из координат | реализовано (при геосообщении) |
+| `last_weather_text` | str, HTML прогноза для сохранённого места | реализовано; удаляется при новой геолокации |
+| `last_weather_location` | снимок `{ lat, lon, updated_at }` на момент запроса | реализовано; кэш используется только при совпадении с `last_location` |
+| `last_weather_fetched_at` | ISO UTC, время получения прогноза | реализовано; TTL кэша 4 часа, старые кэши без метаданных обновляются при запросе |
 | `daily_practice` | `{ date_local, card?, crystal?, dice? }` | реализовано; дата по `timezone` пользователя, fallback `Europe/Moscow`; старое `date_msk` читается при миграции |
 | `vip`, `vip_granted_at` | bool, ISO | реализовано |
 | `vip_source` | `code` \| `admin_grant` \| `import` \| `seed_admin` | реализовано |
@@ -98,8 +101,12 @@ Retention: **90 дней**. Миграция из `data/angelic/unknown_angelic.
 
 **Статус:** реализовано (`integrations/analytics.py`).
 
-- Сырые события: `{ ts, user_id, section }`, retention 90 дней.
-- Агрегаты: weekly/monthly сводки для отчётов.
+- Сырые события: `{ ts, user_id, section }`, retention 90 дней, максимум 50 000.
+- Агрегаты: weekly/monthly сводки для отчётов. Новые monthly-записи содержат
+  `period` (`YYYY-MM`), `computed_at`, `start_inclusive`, `end_exclusive` (UTC),
+  `stats_month` (`events`, `unique_users`, `top_sections`); границы соответствуют
+  календарному месяцу МСК. Старые записи с `stats_30d` остаются историческими.
+  Отчёт основан на доступных событиях, текущая сводка базы показана отдельно.
 
 ---
 

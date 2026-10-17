@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import io
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from integrations.csv_export import SafeCsvWriter
 from integrations.json_storage import load_json, save_json
 
 _lock = asyncio.Lock()
@@ -213,7 +213,7 @@ async def export_csv_bytes() -> bytes:
     """Один CSV: code, status, user_id, username, used_at."""
     data = await load_store()
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
+    writer = SafeCsvWriter(buf)
     writer.writerow(["code", "status", "user_id", "username", "used_at"])
     for code in data.get("active", []):
         writer.writerow([code, "active", "", "", ""])
