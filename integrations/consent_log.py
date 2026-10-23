@@ -17,8 +17,13 @@ from integrations.json_storage import load_json, run_storage_io, save_json
 _BASE = Path(__file__).resolve().parent.parent
 CONSENT_LOG_FILE = Path(os.getenv("MARANIUS_RUNTIME_DIR") or _BASE) / "consent_log.json"
 
-RETENTION_DAYS = 365
-MAX_EVENTS = 50_000
+# Срок хранения: вся история пользователя хранится, пока он взаимодействует с ботом,
+# и 3 года после его последней записи (в том числе отзыва согласия). Совпадает с
+# разделом 7 Политики на maranius.ru (редакция 1.2).
+RETENTION_DAYS = 3 * 365
+# Предохранитель размера файла, а не срок хранения: журнал целиком перезаписывается
+# при каждой записи. При приближении к лимиту нужен переход на БД.
+MAX_EVENTS = 200_000
 _LOCK = asyncio.Lock()
 
 
@@ -26,20 +31,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _parse_created_at(entry: Dict[str, Any]) -> Optional[datetime]:
+    try:
+        created_at = datetime.fromisoformat(str(entry.get("created_at", "")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return created_at
+
+
 def _purge(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
-    kept: List[Dict[str, Any]] = []
+    dated: List[tuple] = []
+    last_seen: Dict[Any, datetime] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        try:
-            created_at = datetime.fromisoformat(str(entry.get("created_at", "")).replace("Z", "+00:00"))
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
+        created_at = _parse_created_at(entry)
+        if created_at is None:
             continue
-        if created_at >= cutoff:
-            kept.append(entry)
+        dated.append((entry, created_at))
+        user = entry.get("user_id")
+        if user not in last_seen or created_at > last_seen[user]:
+            last_seen[user] = created_at
+    # Запись хранится, пока у её пользователя есть хотя бы одна запись моложе срока.
+    kept = [entry for entry, _ in dated if last_seen[entry.get("user_id")] >= cutoff]
     return kept[-MAX_EVENTS:]
 
 

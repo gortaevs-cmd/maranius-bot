@@ -23,7 +23,7 @@ users_lock = asyncio.Lock()
 # Версии опубликованных документов Maranius. Нельзя менять исторические записи
 # пользователей на новые версии задним числом: новая версия всегда требует нового
 # активного действия в интерфейсе бота.
-PRIVACY_POLICY_VERSION = "2026-08-31-v1.1"
+PRIVACY_POLICY_VERSION = "2026-10-24-v1.2"
 PERSONAL_DATA_CONSENT_VERSION = "2026-08-31-v1.0"
 MARKETING_CONSENT_VERSION = "2026-08-31-v1.0"
 USER_AGREEMENT_VERSION = "2026-08-31-v1.0"
