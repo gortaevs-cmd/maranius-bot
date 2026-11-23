@@ -43,3 +43,40 @@ jobs:
           docker image save "$IMAGE" | ssh -i ~/.ssh/id_maranius_bot_deploy -o IdentitiesOnly=yes \
             -o BatchMode=yes -o StrictHostKeyChecking=yes \
             github-maranius-bot@94.241.142.242 "deploy $SHA"
+
+      # Export evidence only after the existing deployment and verification succeed.
+      - name: Record verified deployment receipt
+        if: success()
+        env:
+          PROJECT_ID: bot-maranius
+          REPOSITORY: ${{ github.repository }}
+          RECEIPT_RUN_ID: ${{ github.run_id }}
+          RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DEPLOYED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          python3 - <<'PYRECEIPT'
+          import json, os, re, subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
+          sha = os.environ['DEPLOYED_SHA']
+          checks = ['restricted_deploy_succeeded']
+          if not re.fullmatch('[0-9a-f]{40}', sha):
+              raise SystemExit('Full source SHA required')
+          receipt = {'schema_version': 1, 'project_id': os.environ['PROJECT_ID'],
+                     'repository': os.environ['REPOSITORY'], 'source_sha': sha,
+                     'run_id': int(os.environ['RECEIPT_RUN_ID']),
+                     'run_attempt': int(os.environ['RECEIPT_RUN_ATTEMPT']),
+                     'observed_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                     'result': 'verified_deployment', 'checks': checks}
+          Path('project-state-receipt.json').write_text(json.dumps(receipt, indent=2))
+          PYRECEIPT
+      - name: Preserve project state evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-state-receipt
+          path: project-state-receipt.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90

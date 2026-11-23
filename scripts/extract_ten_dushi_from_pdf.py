@@ -258,7 +258,7 @@ def build_markdown(
         if sec != current_section:
             current_section = sec
             lines.extend([f"### {sec}", ""])
-        lines.extend([f"#### {_card_heading(card)} {{#{card['anchor']}}}", ""])
+        lines.extend([f"#### {_card_heading(card)}", ""])
         if card.get("body"):
             lines.append(card["body"])
         lines.append("")
